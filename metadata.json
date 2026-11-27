@@ -1,0 +1,6 @@
+{
+  "name": "استوديو كويز برو",
+  "description": "استوديو كويز برو لصناعة وتصدير فيديوهات ريلز وشورتس الأسئلة والخيارات الأربعة مع الأصوات والحركات والتصدير المباشر.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e1b4b"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#06b6d4"/>
+    </linearGradient>
+    <linearGradient id="amber" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fbbf24"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect x="24" y="24" width="464" height="464" rx="92" fill="none" stroke="#22d3ee" stroke-opacity="0.22" stroke-width="5"/>
+  <!-- 9:16 Reels Frame -->
+  <rect x="148" y="84" width="216" height="344" rx="34" fill="#111834" stroke="url(#cyan)" stroke-width="12"/>
+  <!-- Play Triangle -->
+  <polygon points="210,192 210,320 318,256" fill="url(#cyan)" stroke="#0f172a" stroke-width="6" stroke-linejoin="round"/>
+  <!-- Amber Quiz Badge -->
+  <circle cx="322" cy="256" r="54" fill="#0f172a" stroke="url(#amber)" stroke-width="8"/>
+  <path d="M304 242 C304 226 340 226 340 244 C340 256 322 260 322 272" fill="none" stroke="url(#amber)" stroke-width="11" stroke-linecap="round"/>
+  <circle cx="322" cy="290" r="7" fill="url(#amber)"/>
+</svg>
