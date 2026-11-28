@@ -2924,6 +2924,7 @@ export function computeStageLayerLayout(
 ): StageLayerLayout {
   const { width: W, height: H } = getCanvasDimensions(template);
   const isWide = template.aspectRatio === '16:9';
+  const isSquare = template.aspectRatio === '1:1';
   const isFreeLayout = Boolean(template.freeLayoutMode);
   const fontStack = `'${template.fontFamily}', 'Cairo', 'Tajawal', sans-serif`;
   const isChannelLayout = template.optionsLayout === 'channel2x2';
@@ -3260,7 +3261,9 @@ export function computeStageLayerLayout(
   const desiredQCenterY =
     isWide && !isFreeLayout
       ? Math.max(142, Math.min(H * 0.34, (template.questionY / 100) * H * 0.78))
-      : (template.questionY / 100) * H;
+      : isSquare && !isFreeLayout
+        ? Math.max(140, Math.min(H * 0.32, (template.questionY / 100) * H))
+        : (template.questionY / 100) * H;
   let resolvedQCenterY = isFreeLayout ? desiredQCenterY : Math.max(minQCenterY, desiredQCenterY);
 
   // === Layer 5 & 6: Options + Timer + Explanation Sizing ===
@@ -3448,7 +3451,7 @@ export function computeStageLayerLayout(
       ? timerGapTop + timerBoxH + timerGapBottom + optTop + extOptTopPad
       : Math.max(20, optTop + 14) + extOptTopPad) + extraQGap;
 
-  let bottomMargin = isWide ? 24 : 88;
+  let bottomMargin = isWide ? 24 : isSquare ? 36 : 88;
   if (brandRect && hasBottomCornerBrand && !isFreeLayout) {
     const widestBottomSpan = Math.max(totalOptionsW, hasExplanation ? expBoxW : 0);
     const leftEdge = W / 2 - widestBottomSpan / 2;
@@ -3479,7 +3482,9 @@ export function computeStageLayerLayout(
   const desiredOptionsStartPx =
     isWide && !isFreeLayout
       ? Math.max(H * 0.42, Math.min(H * 0.65, (template.optionsStartY / 100) * H * 0.98))
-      : (template.optionsStartY / 100) * H;
+      : isSquare && !isFreeLayout
+        ? Math.max(H * 0.44, Math.min(H * 0.62, (template.optionsStartY / 100) * H))
+        : (template.optionsStartY / 100) * H;
 
   let qBottomPx = getQAndImgBottomOuter();
   let minOptionsStartPx = qBottomPx + computeMinGapQToOptions();

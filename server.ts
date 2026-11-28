@@ -9,6 +9,24 @@ import path from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import zlib from 'node:zlib';
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
+import { createRateLimitMiddleware } from './server/rateLimiter';
+import {
+  SeriesTextRunner,
+  enqueueAppendEpisodesJob,
+  enqueueCreateSeriesJob,
+  enqueueRegenerateEpisode,
+  generateMissingEpisodeAssets,
+  getJobSnapshot,
+  getSeriesSnapshot,
+  hydrateOrGetSeries,
+  regenerateSingleScene,
+} from './server/seriesJobs';
+import {
+  validateAppendEpisodesInput,
+  validateCreateSeriesInput,
+  validateRegenerateSceneInput,
+  validateSeriesIdParam,
+} from './server/seriesValidation';
 
 const PORT = 3000;
 
@@ -232,10 +250,11 @@ function getTextProviderOrder(): TextAiProviderId[] {
   return parsed;
 }
 
-function createAiClientForKey(apiKey: string): GoogleGenAI {
+function createAiClientForKey(apiKey: string, timeoutMs = 45_000): GoogleGenAI {
   return new GoogleGenAI({
     apiKey,
     httpOptions: {
+      timeout: timeoutMs,
       headers: {
         'User-Agent': 'aistudio-build',
       },
@@ -292,13 +311,15 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 
 async function runServerAiWithRotation<T>(
   bucket: 'text' | 'tts',
-  task: (ai: GoogleGenAI) => Promise<T>
+  task: (ai: GoogleGenAI) => Promise<T>,
+  options?: { timeoutMs?: number }
 ): Promise<T> {
   const allKeys = getConfiguredServerKeys();
   if (allKeys.length === 0) {
     throw new Error('مفتاح GEMINI_API_KEY غير مضبوط في إعدادات البيئة.');
   }
 
+  const timeoutMs = options?.timeoutMs ?? (bucket === 'tts' ? 30_000 : 28_000);
   const now = Date.now();
   const cooldownKey = (apiKey: string) => `${apiKey}:${bucket}`;
   const activeKeys = allKeys.filter((k) => (serverKeyCooldowns.get(cooldownKey(k)) ?? 0) <= now);
@@ -318,61 +339,71 @@ async function runServerAiWithRotation<T>(
 
   let lastErr: unknown;
   for (const apiKey of candidates) {
-    try {
-      const ai = createAiClientForKey(apiKey);
-      const result = await withTimeout(task(ai), 15_000, 'Gemini request');
-      if (bucket === 'tts') {
-        const usage = getOrCreateTtsUsage(apiKey);
-        usage.usedToday += 1;
-        usage.dailyExhausted = false;
-        usage.authInvalid = false;
-        usage.lastUsedAt = Date.now();
-        if (usage.usedToday > TTS_FREE_DAILY_LIMIT) {
-          usage.beyondFreeTier = true;
-        }
-        serverKeyCooldowns.delete(cooldownKey(apiKey));
-      }
-      return result;
-    } catch (err) {
-      lastErr = err;
-      const raw = err instanceof Error ? err.message : String(err);
-      const isDaily =
-        raw.includes('PerDay') || raw.includes('per day') || raw.includes('free_tier_requests');
-      const isQuotaOrRate = raw.includes('429') || raw.includes('RESOURCE_EXHAUSTED');
-      const isAuth =
-        raw.includes('403') ||
-        raw.includes('PERMISSION_DENIED') ||
-        raw.includes('API_KEY_INVALID') ||
-        raw.includes('API key not valid');
-
-      const isTransient = isTransientServerError(raw);
-
-      if (isDaily) {
+    const maxAttempts = candidates.length === 1 ? 2 : 1;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const ai = createAiClientForKey(apiKey, timeoutMs);
+        const result = await withTimeout(task(ai), timeoutMs, 'Gemini request');
         if (bucket === 'tts') {
           const usage = getOrCreateTtsUsage(apiKey);
-          usage.dailyExhausted = true;
-          usage.usedToday = Math.max(usage.usedToday, TTS_FREE_DAILY_LIMIT);
+          usage.usedToday += 1;
+          usage.dailyExhausted = false;
+          usage.authInvalid = false;
+          usage.lastUsedAt = Date.now();
+          if (usage.usedToday > TTS_FREE_DAILY_LIMIT) {
+            usage.beyondFreeTier = true;
+          }
+          serverKeyCooldowns.delete(cooldownKey(apiKey));
         }
-        serverKeyCooldowns.set(cooldownKey(apiKey), Date.now() + getNextUtcResetMs());
-        continue;
-      }
-      if (isQuotaOrRate) {
-        serverKeyCooldowns.set(cooldownKey(apiKey), Date.now() + 45_000);
-        continue;
-      }
-      if (isAuth) {
-        if (bucket === 'tts') {
-          const usage = getOrCreateTtsUsage(apiKey);
-          usage.authInvalid = true;
+        return result;
+      } catch (err) {
+        lastErr = err;
+        const raw = err instanceof Error ? err.message : String(err);
+        const isTimedOut = raw.toLowerCase().includes('timed out');
+        const isDaily =
+          raw.includes('PerDay') || raw.includes('per day') || raw.includes('free_tier_requests');
+        const isQuotaOrRate = raw.includes('429') || raw.includes('RESOURCE_EXHAUSTED');
+        const isAuth =
+          raw.includes('403') ||
+          raw.includes('PERMISSION_DENIED') ||
+          raw.includes('API_KEY_INVALID') ||
+          raw.includes('API key not valid');
+
+        const isTransient = isTransientServerError(raw);
+
+        if (isDaily) {
+          if (bucket === 'tts') {
+            const usage = getOrCreateTtsUsage(apiKey);
+            usage.dailyExhausted = true;
+            usage.usedToday = Math.max(usage.usedToday, TTS_FREE_DAILY_LIMIT);
+          }
+          serverKeyCooldowns.set(cooldownKey(apiKey), Date.now() + getNextUtcResetMs());
+          break;
         }
-        serverKeyCooldowns.set(cooldownKey(apiKey), Date.now() + 24 * 60 * 60_000);
-        continue;
+        if (isQuotaOrRate) {
+          serverKeyCooldowns.set(cooldownKey(apiKey), Date.now() + 45_000);
+          break;
+        }
+        if (isAuth) {
+          if (bucket === 'tts') {
+            const usage = getOrCreateTtsUsage(apiKey);
+            usage.authInvalid = true;
+          }
+          serverKeyCooldowns.set(cooldownKey(apiKey), Date.now() + 24 * 60 * 60_000);
+          break;
+        }
+        if (isTransient) {
+          if (!isTimedOut && attempt + 1 < maxAttempts) {
+            await sleep(600);
+            continue;
+          }
+          if (candidates.length > 1) {
+            serverKeyCooldowns.set(cooldownKey(apiKey), Date.now() + 15_000);
+            break;
+          }
+        }
+        throw err;
       }
-      if (isTransient && candidates.length > 1) {
-        serverKeyCooldowns.set(cooldownKey(apiKey), Date.now() + 15_000);
-        continue;
-      }
-      throw err;
     }
   }
 
@@ -506,7 +537,7 @@ async function callOpenAiCompatibleJson(
       headers,
       body: JSON.stringify(bodyPayload),
     }),
-    15_000,
+    35_000,
     `${provider} (${model})`
   );
 
@@ -547,7 +578,7 @@ async function callAnthropicJson(
         messages: [{ role: 'user', content: userPrompt }],
       }),
     }),
-    15_000,
+    35_000,
     `anthropic (${model})`
   );
 
@@ -1130,7 +1161,7 @@ ${diversityDirective}
               model,
               contents: promptText,
               config: {
-                temperature: isMath ? 0.85 : 1.05,
+                ...(model.startsWith('gemini-4-') ? {} : { temperature: isMath ? 0.85 : 1.05 }),
                 thinkingConfig: {
                   thinkingLevel:
                     model === 'gemini-3.1-flash-lite'
@@ -1369,7 +1400,7 @@ ${prevTopics ? `المحاور المقترحة مسبقاً: ${prevTopics}` : '
             model,
             contents: advisePrompt,
             config: {
-              temperature: 0.9,
+              ...(model.startsWith('gemini-4-') ? {} : { temperature: 0.9 }),
               thinkingConfig: {
                 thinkingLevel:
                   model === 'gemini-3.1-flash-lite'
@@ -1785,7 +1816,7 @@ Return JSON object with fields:
             model,
             contents: ttsPrompt,
             config: {
-              temperature: 0.15,
+              ...(model.startsWith('gemini-4-') ? {} : { temperature: 0.15 }),
               thinkingConfig: {
                 thinkingLevel:
                   model === 'gemini-3.1-flash-lite'
@@ -1883,7 +1914,7 @@ Return JSON object with fields:
             model,
             contents: evidencePrompt,
             config: {
-              temperature: 0.25,
+              ...(model.startsWith('gemini-4-') ? {} : { temperature: 0.25 }),
               thinkingConfig: {
                 thinkingLevel:
                   model === 'gemini-3.1-flash-lite'
@@ -1971,8 +2002,8 @@ Return JSON object with fields:
         avoidQuestions?: string[];
       };
 
-      const safeEpCount = Math.max(2, Math.min(12, Math.round(Number(episodeCount) || 4)));
-      const safeQPerEp = Math.max(1, Math.min(6, Math.round(Number(questionsPerEpisode) || 3)));
+      const safeEpCount = Math.max(2, Math.min(25, Math.round(Number(episodeCount) || 4)));
+      const safeQPerEp = Math.max(1, Math.min(15, Math.round(Number(questionsPerEpisode) || 3)));
       const allowedCategories = new Set([
         'general',
         'discussion',
@@ -2076,7 +2107,7 @@ ${avoidBlock}
               model,
               contents: seriesPrompt,
               config: {
-                temperature: 0.75,
+                ...(model.startsWith('gemini-4-') ? {} : { temperature: 0.75 }),
                 thinkingConfig: {
                   thinkingLevel:
                     model === 'gemini-3.1-flash-lite'
@@ -2218,6 +2249,212 @@ ${avoidBlock}
         });
 
       res.json({ ...builtSeries, provider: usedProvider, model: usedModel });
+    } catch (err) {
+      const formatted = formatGeminiError(err, 'text');
+      res.status(formatted.status).json({
+        error: formatted.message,
+        quotaExhausted: formatted.quotaExhausted,
+      });
+    }
+  });
+
+  // ============================================================================
+  // AI Video-Series Creation Studio — Queued Background Jobs & Regeneration APIs
+  // ============================================================================
+  const seriesAiRateLimit = createRateLimitMiddleware({
+    windowMs: 10 * 60 * 1000,
+    maxRequests: 15,
+    bucketName: 'series-ai',
+  });
+
+  const seriesAiRunner: SeriesTextRunner = {
+    runJson: async ({ systemInstruction, userPrompt, temperature, parseAndValidate }) => {
+      const result = await runTextJsonAcrossProviders({
+        geminiTask: async (ai, model) => {
+          const response = await ai.models.generateContent({
+            model,
+            contents: userPrompt,
+            config: {
+              ...(model.startsWith('gemini-4-') ? {} : { temperature: temperature ?? 0.72 }),
+              thinkingConfig: {
+                thinkingLevel:
+                  model === 'gemini-3.1-flash-lite'
+                    ? ThinkingLevel.MINIMAL
+                    : ThinkingLevel.LOW,
+              },
+              systemInstruction,
+              responseMimeType: 'application/json',
+            },
+          });
+          return response.text ?? '{}';
+        },
+        externalSystemInstruction: systemInstruction,
+        externalUserPrompt: userPrompt,
+        parseAndValidate,
+      });
+      return result.data;
+    },
+  };
+
+  app.post('/api/series', seriesAiRateLimit, (req, res) => {
+    const validated = validateCreateSeriesInput(req.body);
+    if (!validated.ok) {
+      res.status(400).json({ error: validated.error });
+      return;
+    }
+    const summary = getConfiguredProvidersSummary();
+    const configuredCount = Object.values(summary).reduce((acc, n) => acc + n, 0);
+    if (configuredCount === 0) {
+      res.status(503).json({
+        error:
+          'مفاتيح الذكاء الاصطناعي غير مضبوطة على الخادم (GEMINI_API_KEY أو GROQ_API_KEY أو OPENROUTER_API_KEY).',
+      });
+      return;
+    }
+    const { series, job } = enqueueCreateSeriesJob(validated.value, seriesAiRunner);
+    res.status(202).json({ series, job });
+  });
+
+  app.get('/api/series/jobs/:jobId', (req, res) => {
+    const idCheck = validateSeriesIdParam(req.params.jobId);
+    if (!idCheck.ok) {
+      res.status(400).json({ error: idCheck.error });
+      return;
+    }
+    const snapshot = getJobSnapshot(idCheck.value);
+    if (!snapshot) {
+      res.status(404).json({ error: 'لم يتم العثور على مهمة التوليد المطلوبة.' });
+      return;
+    }
+    res.json(snapshot);
+  });
+
+  app.get('/api/series/:seriesId', (req, res) => {
+    const idCheck = validateSeriesIdParam(req.params.seriesId);
+    if (!idCheck.ok) {
+      res.status(400).json({ error: idCheck.error });
+      return;
+    }
+    const series = getSeriesSnapshot(idCheck.value);
+    if (!series) {
+      res.status(404).json({ error: 'السلسلة غير موجودة في ذاكرة الخادم.' });
+      return;
+    }
+    res.json({ series });
+  });
+
+  app.post('/api/series/:seriesId/episodes/:episodeId/regenerate', seriesAiRateLimit, (req, res) => {
+    const sCheck = validateSeriesIdParam(req.params.seriesId);
+    const eCheck = validateSeriesIdParam(req.params.episodeId);
+    if (!sCheck.ok || !eCheck.ok) {
+      res.status(400).json({ error: 'معرّف السلسلة أو الحلقة غير صالح.' });
+      return;
+    }
+    const series = hydrateOrGetSeries(sCheck.value, req.body?.seriesSnapshot);
+    if (!series) {
+      res.status(404).json({ error: 'تعذر العثور على السلسلة لإعادة التوليد.' });
+      return;
+    }
+    const queued = enqueueRegenerateEpisode(series, eCheck.value, seriesAiRunner);
+    if (!queued) {
+      res.status(404).json({ error: 'الحلقة المطلوبة غير موجودة.' });
+      return;
+    }
+    res.status(202).json(queued);
+  });
+
+  app.post('/api/series/:seriesId/episodes/append', seriesAiRateLimit, (req, res) => {
+    const sCheck = validateSeriesIdParam(req.params.seriesId);
+    if (!sCheck.ok) {
+      res.status(400).json({ error: sCheck.error });
+      return;
+    }
+    const bodyCheck = validateAppendEpisodesInput(req.body);
+    if (!bodyCheck.ok) {
+      res.status(400).json({ error: bodyCheck.error });
+      return;
+    }
+    const summary = getConfiguredProvidersSummary();
+    const configuredCount = Object.values(summary).reduce((acc, n) => acc + n, 0);
+    if (configuredCount === 0) {
+      res.status(503).json({
+        error:
+          'مفاتيح الذكاء الاصطناعي غير مضبوطة على الخادم (GEMINI_API_KEY أو GROQ_API_KEY أو OPENROUTER_API_KEY).',
+      });
+      return;
+    }
+    const series = hydrateOrGetSeries(sCheck.value, req.body?.seriesSnapshot);
+    if (!series) {
+      res.status(404).json({ error: 'تعذر العثور على السلسلة لاستكمال حلقاتها.' });
+      return;
+    }
+    const queued = enqueueAppendEpisodesJob(series, bodyCheck.value, seriesAiRunner);
+    res.status(202).json(queued);
+  });
+
+  app.post(
+    '/api/series/:seriesId/episodes/:episodeId/scenes/:sceneId/regenerate',
+    seriesAiRateLimit,
+    async (req, res) => {
+      const sCheck = validateSeriesIdParam(req.params.seriesId);
+      const eCheck = validateSeriesIdParam(req.params.episodeId);
+      const scCheck = validateSeriesIdParam(req.params.sceneId);
+      const bodyCheck = validateRegenerateSceneInput(req.body);
+      if (!sCheck.ok || !eCheck.ok || !scCheck.ok) {
+        res.status(400).json({ error: 'معرّفات المشهد غير صالحة.' });
+        return;
+      }
+      if (!bodyCheck.ok) {
+        res.status(400).json({ error: bodyCheck.error });
+        return;
+      }
+      const series = hydrateOrGetSeries(sCheck.value, req.body?.seriesSnapshot);
+      if (!series) {
+        res.status(404).json({ error: 'تعذر العثور على السلسلة.' });
+        return;
+      }
+      try {
+        const result = await regenerateSingleScene(
+          series,
+          eCheck.value,
+          scCheck.value,
+          bodyCheck.value.instruction,
+          seriesAiRunner
+        );
+        if (!result) {
+          res.status(404).json({ error: 'الحلقة أو المشهد غير موجود.' });
+          return;
+        }
+        res.json(result);
+      } catch (err) {
+        const formatted = formatGeminiError(err, 'text');
+        res.status(formatted.status).json({
+          error: formatted.message,
+          quotaExhausted: formatted.quotaExhausted,
+        });
+      }
+    }
+  );
+
+  app.post('/api/series/:seriesId/episodes/:episodeId/assets', seriesAiRateLimit, async (req, res) => {
+    const sCheck = validateSeriesIdParam(req.params.seriesId);
+    const eCheck = validateSeriesIdParam(req.params.episodeId);
+    if (!sCheck.ok || !eCheck.ok) {
+      res.status(400).json({ error: 'معرّف السلسلة أو الحلقة غير صالح.' });
+      return;
+    }
+    const series = hydrateOrGetSeries(sCheck.value, req.body?.seriesSnapshot);
+    if (!series) {
+      res.status(404).json({ error: 'تعذر العثور على السلسلة.' });
+      return;
+    }
+    try {
+      const result = await generateMissingEpisodeAssets(series, eCheck.value, seriesAiRunner);
+      if (!result) {
+        res.status(404).json({ error: 'الحلقة المطلوبة غير موجودة.' });
+        return;
+      }
+      res.json(result);
     } catch (err) {
       const formatted = formatGeminiError(err, 'text');
       res.status(formatted.status).json({

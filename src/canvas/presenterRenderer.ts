@@ -17,6 +17,7 @@ import {
   SlideSchedule,
   TemplateSettings,
   TimingSettings,
+  VideoAspectRatio,
   computeProjectTimeline,
   getIntroHookDuration,
   getSlidesContentDuration,
@@ -2859,9 +2860,10 @@ export function resolveAiPresenterRect(
   ai: AiPresenterOverlay,
   W: number,
   H: number,
-  aspectRatio?: '9:16' | '16:9'
+  aspectRatio?: VideoAspectRatio
 ): PresenterStageRect {
   const isWide = aspectRatio === '16:9';
+  const isSquare = aspectRatio === '1:1';
   const scale = Math.max(0.4, Math.min(2.2, (ai.scale ?? 100) / 100));
   const shape: PresenterFrameShape = ai.frameShape || 'cutout';
   const placement: PresenterPlacement = ai.placement || 'cornerBottomRight';
@@ -2870,7 +2872,17 @@ export function resolveAiPresenterRect(
   const vidAspect =
     media && media.width > 0 && media.height > 0 ? media.width / media.height : 9 / 16;
 
-  let baseW = isWide ? (shape === 'circleCam' ? 230 : 270) : shape === 'circleCam' ? 250 : 300;
+  let baseW = isWide
+    ? shape === 'circleCam'
+      ? 230
+      : 270
+    : isSquare
+      ? shape === 'circleCam'
+        ? 210
+        : 235
+      : shape === 'circleCam'
+        ? 250
+        : 300;
   let baseH = shape === 'circleCam' ? baseW : Math.round(baseW / Math.max(0.55, Math.min(1.6, vidAspect)));
   if (shape === 'broadcastCard') {
     baseH = Math.round(baseW * 1.24);

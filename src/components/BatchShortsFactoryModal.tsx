@@ -1158,7 +1158,7 @@ export const BatchShortsFactoryModal: React.FC<BatchShortsFactoryModalProps> = (
                         <input
                           type="range"
                           min={2}
-                          max={12}
+                          max={25}
                           step={1}
                           disabled={isRunning || isGeneratingSeries}
                           value={seriesEpisodeCount}
@@ -1176,7 +1176,7 @@ export const BatchShortsFactoryModal: React.FC<BatchShortsFactoryModalProps> = (
                         <input
                           type="range"
                           min={1}
-                          max={6}
+                          max={15}
                           step={1}
                           disabled={isRunning || isGeneratingSeries}
                           value={seriesPerEpisode}

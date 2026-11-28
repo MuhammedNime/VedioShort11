@@ -229,6 +229,7 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
 
   const { width: canvasW, height: canvasH } = getCanvasDimensions(template);
   const isWide = template.aspectRatio === '16:9';
+  const isSquare = template.aspectRatio === '1:1';
   const totalDuration = getTotalDuration(slides, timing, audio, template);
 
   const timeRef = useRef(0);
@@ -1437,7 +1438,9 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
           } ${
             isWide
               ? 'w-full max-w-[780px] max-h-full aspect-video'
-              : 'h-full max-h-[650px] aspect-[9/16]'
+              : isSquare
+                ? 'h-full max-h-[560px] max-w-full aspect-square'
+                : 'h-full max-h-[650px] aspect-[9/16]'
           }`}
         >
           <canvas
@@ -1639,15 +1642,15 @@ export const ShortsPreviewStage: React.FC<ShortsPreviewStageProps> = ({
               <button
                 type="button"
                 onClick={onToggleAspectRatio}
-                title="تبديل أبعاد الفيديو بين شورتس 9:16 وفيديو طويل 16:9"
+                title="تبديل أبعاد الفيديو بين 9:16 و 16:9 و 1:1"
                 className={`flex items-center gap-1 h-8 px-2.5 rounded-lg text-xs font-bold border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                  isWide
+                  isWide || template.aspectRatio === '1:1'
                     ? 'bg-[#00B050]/18 border-[#00B050] text-[#00B050] dark:text-[#6ee7b7]'
                     : 'bg-[var(--surface)] border-[var(--pline)] text-[var(--ptxt)] hover:border-[var(--gold)]'
                 }`}
               >
                 {isWide ? <Monitor className="w-3.5 h-3.5" /> : <Smartphone className="w-3.5 h-3.5" />}
-                <span>{isWide ? '16:9' : '9:16'}</span>
+                <span>{template.aspectRatio || '9:16'}</span>
               </button>
             )}
 

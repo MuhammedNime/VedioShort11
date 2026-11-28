@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { User } from 'firebase/auth';
 import {
+  ArrowRight,
   Bot,
   Brain,
   Cloud,
@@ -66,6 +67,7 @@ import {
 import { getDefaultCustomPreset } from './storage/customPresets';
 import {
   listProjectsFromStore,
+  loadProjectById,
   loadProjectFromStore,
   normalizeLoadedProject,
   saveProjectToStore,
@@ -202,7 +204,13 @@ function buildDefaultPublishKit(proj: QuizProject): YoutubePublishKit {
   return { title, description, hashtags, tags, pinnedComment };
 }
 
-export default function App() {
+export interface AppProps {
+  initialProjectId?: string;
+  returnLabel?: string;
+  onBackToStudio?: () => void;
+}
+
+export default function App({ initialProjectId, returnLabel, onBackToStudio }: AppProps = {}) {
   const [project, setProject] = useState<QuizProject>(() => createDefaultProject());
   const [isLoaded, setIsLoaded] = useState(false);
   const [activeTab, setActiveTab] = useState<StudioTab>('slides');
@@ -492,8 +500,14 @@ export default function App() {
   }, [handleUndo, handleRedo]);
 
   useEffect(() => {
-    void loadProjectFromStore().then((loaded) => {
-      if (!hasLocalMutationRef.current) {
+    let active = true;
+    const loader = initialProjectId
+      ? loadProjectById(initialProjectId).then((proj) => proj ?? loadProjectFromStore())
+      : loadProjectFromStore();
+
+    void loader.then((loaded) => {
+      if (!active) return;
+      if (!hasLocalMutationRef.current || (initialProjectId && loaded.id === initialProjectId)) {
         setProject(loaded);
         if (loaded.publishKit) {
           kitEditedRef.current = true;
@@ -514,7 +528,10 @@ export default function App() {
       }
       setIsLoaded(true);
     });
-  }, []);
+    return () => {
+      active = false;
+    };
+  }, [initialProjectId]);
 
   useEffect(() => {
     if (!isLoaded) return;
@@ -1071,13 +1088,17 @@ export default function App() {
   const handleToggleAspectRatio = useCallback(() => {
     triggerHaptic('light');
     updateProject(
-      (prev) => ({
-        ...prev,
-        template: {
-          ...prev.template,
-          aspectRatio: prev.template.aspectRatio === '16:9' ? '9:16' : '16:9',
-        },
-      }),
+      (prev) => {
+        const cur = prev.template.aspectRatio;
+        const next = cur === '9:16' ? '16:9' : cur === '16:9' ? '1:1' : '9:16';
+        return {
+          ...prev,
+          template: {
+            ...prev.template,
+            aspectRatio: next,
+          },
+        };
+      },
       true
     );
   }, [updateProject]);
@@ -1115,14 +1136,30 @@ export default function App() {
     <div className="h-[100dvh] lg:h-screen flex flex-col bg-[var(--page)] text-[var(--ptxt)] overflow-hidden">
       {/* Top Bar Contract: 3 zones separated by gap-8 */}
       <header className="flex items-center justify-between gap-3 lg:gap-8 px-3.5 lg:px-6 h-13 lg:h-16 border-b border-[var(--pline)] bg-[var(--panel)] shrink-0">
-        {/* Zone 1: Single text element wordmark */}
-        <a
-          href="#top"
-          onClick={(e) => e.preventDefault()}
-          className="font-display text-sm sm:text-base lg:text-lg font-extrabold tracking-tight text-[var(--ptxt)] whitespace-nowrap shrink-0"
-        >
-          استوديو كويز برو
-        </a>
+        {/* Zone 1: Back link (when launched from Series Studio) + Wordmark */}
+        <div className="flex items-center gap-2.5 shrink-0 min-w-0">
+          {onBackToStudio && (
+            <button
+              type="button"
+              onClick={() => {
+                triggerHaptic('light');
+                onBackToStudio();
+              }}
+              aria-label={returnLabel || 'العودة إلى استوديو السلاسل'}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-[var(--pline)] bg-[var(--surface)] hover:border-[#00B050]/70 text-[11px] sm:text-xs font-bold text-[var(--ptxt)] transition-colors cursor-pointer shrink-0"
+            >
+              <ArrowRight className="w-3.5 h-3.5 text-[#00B050]" />
+              <span>{returnLabel || 'السلاسل'}</span>
+            </button>
+          )}
+          <a
+            href="#top"
+            onClick={(e) => e.preventDefault()}
+            className="font-display text-sm sm:text-base lg:text-lg font-extrabold tracking-tight text-[var(--ptxt)] whitespace-nowrap shrink-0"
+          >
+            استوديو كويز برو
+          </a>
+        </div>
 
         {/* Zone 2: 7 single-line navigation links (Desktop / Tablet) */}
         <nav className="hidden md:flex items-center gap-3 lg:gap-5 text-xs lg:text-sm font-semibold text-[var(--pmuted)]">

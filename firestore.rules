@@ -32,6 +32,44 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidSeriesStatus(s) {
+      return s in ['queued', 'generating', 'reviewing', 'ready', 'exporting', 'failed'];
+    }
+
+    function isValidSeriesFormat(f) {
+      return f in ['9:16', '16:9', '1:1'];
+    }
+
+    function isValidBrandMap(b) {
+      return b is map &&
+        b.keys().hasAll([
+          'id',
+          'name',
+          'presetId',
+          'primaryColors',
+          'secondaryColors',
+          'typography',
+          'narrator',
+          'music',
+          'intro',
+          'outro',
+          'subtitleStyle',
+          'lowerThirdStyle'
+        ]) &&
+        b.id is string && b.id.size() >= 1 && b.id.size() <= 128 &&
+        b.name is string && b.name.size() >= 1 && b.name.size() <= 120 &&
+        b.presetId is string && b.presetId.size() >= 1 && b.presetId.size() <= 64 &&
+        b.primaryColors is map &&
+        b.secondaryColors is map &&
+        b.typography is map &&
+        b.narrator is map &&
+        b.music is map &&
+        b.intro is map &&
+        b.outro is map &&
+        b.subtitleStyle is map &&
+        b.lowerThirdStyle is map;
+    }
+
     // 3. Entity Validation Helpers
     function isValidUserProfile(data, userId) {
       return data.keys().hasAll(['uid', 'email', 'displayName', 'createdAt', 'updatedAt']) &&
@@ -177,7 +215,7 @@ service cloud.firestore {
         data.name is string && data.name.size() >= 1 && data.name.size() <= 120 &&
         data.schemaVersion is int && data.schemaVersion >= 1 && data.schemaVersion <= 30 &&
         data.preferredAiVoice in ['Kore', 'Puck', 'Charon', 'Fenrir', 'Zephyr'] &&
-        data.aspectRatio in ['9:16', '16:9'] &&
+        data.aspectRatio in ['9:16', '16:9', '1:1'] &&
         data.slideCount is int && data.slideCount >= 1 && data.slideCount <= 50 &&
         data.projectJson is string && data.projectJson.size() >= 10 && data.projectJson.size() <= 650000 &&
         data.updatedAt is int && data.updatedAt >= 0 &&
@@ -212,6 +250,285 @@ service cloud.firestore {
         data.updatedAt is int && data.updatedAt >= 0 &&
         data.includesMedia is bool &&
         data.presetJson is string && data.presetJson.size() >= 2 && data.presetJson.size() <= 150000 &&
+        data.serverUpdatedAt is timestamp;
+    }
+
+    function isValidBrandPresetDoc(data, userId, brandPresetId) {
+      return data.keys().hasAll([
+          'id',
+          'ownerId',
+          'name',
+          'presetId',
+          'primaryColors',
+          'secondaryColors',
+          'typography',
+          'narrator',
+          'music',
+          'intro',
+          'outro',
+          'subtitleStyle',
+          'lowerThirdStyle',
+          'updatedAt',
+          'serverUpdatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'ownerId',
+          'name',
+          'presetId',
+          'logo',
+          'primaryColors',
+          'secondaryColors',
+          'typography',
+          'narrator',
+          'music',
+          'intro',
+          'outro',
+          'subtitleStyle',
+          'lowerThirdStyle',
+          'updatedAt',
+          'serverUpdatedAt'
+        ]) &&
+        data.id is string && data.id == brandPresetId && isValidId(data.id) &&
+        data.ownerId is string && data.ownerId == userId && data.ownerId == request.auth.uid &&
+        isValidBrandMap(data) &&
+        data.updatedAt is int && data.updatedAt >= 0 &&
+        data.serverUpdatedAt is timestamp;
+    }
+
+    function isValidSeriesDoc(data, userId, seriesId) {
+      return data.keys().hasAll([
+          'id',
+          'ownerId',
+          'schemaVersion',
+          'name',
+          'topic',
+          'prompt',
+          'language',
+          'audience',
+          'status',
+          'episodeCount',
+          'targetDurationSec',
+          'stylePreset',
+          'format',
+          'brandPreset',
+          'createdAt',
+          'updatedAt',
+          'serverUpdatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'ownerId',
+          'schemaVersion',
+          'name',
+          'topic',
+          'prompt',
+          'language',
+          'audience',
+          'status',
+          'episodeCount',
+          'isOpenEnded',
+          'scenesPerEpisode',
+          'targetDurationSec',
+          'stylePreset',
+          'format',
+          'brandPreset',
+          'activeJobId',
+          'error',
+          'createdAt',
+          'updatedAt',
+          'serverUpdatedAt'
+        ]) &&
+        data.id is string && data.id == seriesId && isValidId(data.id) &&
+        data.ownerId is string && data.ownerId == userId && data.ownerId == request.auth.uid &&
+        data.schemaVersion is int && data.schemaVersion >= 1 && data.schemaVersion <= 20 &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 140 &&
+        data.topic is string && data.topic.size() >= 1 && data.topic.size() <= 400 &&
+        data.prompt is string && data.prompt.size() <= 600 &&
+        data.language in ['ar', 'en', 'bilingual'] &&
+        data.audience in ['general', 'youth', 'kids', 'professionals', 'students'] &&
+        isValidSeriesStatus(data.status) &&
+        data.episodeCount is int && data.episodeCount >= 1 && data.episodeCount <= 500 &&
+        (!('isOpenEnded' in data) || data.isOpenEnded is bool) &&
+        (!('scenesPerEpisode' in data) || (data.scenesPerEpisode is int && data.scenesPerEpisode >= 0 && data.scenesPerEpisode <= 30)) &&
+        data.targetDurationSec is int && data.targetDurationSec >= 15 && data.targetDurationSec <= 600 &&
+        data.stylePreset in ['educational', 'documentary', 'storytelling', 'quizChallenge', 'fastFacts', 'mythBuster'] &&
+        isValidSeriesFormat(data.format) &&
+        isValidBrandMap(data.brandPreset) &&
+        (!('activeJobId' in data) || (data.activeJobId is string && data.activeJobId.size() <= 128)) &&
+        (!('error' in data) || (data.error is string && data.error.size() <= 400)) &&
+        data.createdAt is int && data.createdAt >= 0 &&
+        data.updatedAt is int && data.updatedAt >= 0 &&
+        data.serverUpdatedAt is timestamp;
+    }
+
+    function isValidEpisodeDoc(data, userId, seriesId, episodeId) {
+      return data.keys().hasAll([
+          'id',
+          'seriesId',
+          'ownerId',
+          'index',
+          'title',
+          'titleOptions',
+          'hook',
+          'script',
+          'duration',
+          'status',
+          'narration',
+          'music',
+          'publishKit',
+          'exportSettings',
+          'updatedAt',
+          'serverUpdatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'seriesId',
+          'ownerId',
+          'index',
+          'title',
+          'titleOptions',
+          'hook',
+          'script',
+          'duration',
+          'status',
+          'thumbnail',
+          'thumbnailConcepts',
+          'narration',
+          'music',
+          'captions',
+          'publishKit',
+          'exportSettings',
+          'projectRef',
+          'factReviewSummary',
+          'error',
+          'updatedAt',
+          'serverUpdatedAt'
+        ]) &&
+        data.id is string && data.id == episodeId && isValidId(data.id) &&
+        data.seriesId is string && data.seriesId == seriesId && isValidId(data.seriesId) &&
+        data.ownerId is string && data.ownerId == userId && data.ownerId == request.auth.uid &&
+        data.index is int && data.index >= 0 && data.index <= 500 &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 160 &&
+        data.titleOptions is list && data.titleOptions.size() >= 1 && data.titleOptions.size() <= 4 &&
+        data.hook is string && data.hook.size() <= 400 &&
+        data.script is string && data.script.size() <= 12000 &&
+        data.duration is number && data.duration >= 5 && data.duration <= 3600 &&
+        isValidSeriesStatus(data.status) &&
+        data.narration is map &&
+        data.music is map &&
+        data.publishKit is map &&
+        data.exportSettings is map &&
+        (!('thumbnailConcepts' in data) || (data.thumbnailConcepts is list && data.thumbnailConcepts.size() <= 4)) &&
+        (!('captions' in data) || (data.captions is list && data.captions.size() <= 120)) &&
+        (!('projectRef' in data) || (data.projectRef is string && data.projectRef.size() <= 128)) &&
+        (!('error' in data) || (data.error is string && data.error.size() <= 400)) &&
+        data.updatedAt is int && data.updatedAt >= 0 &&
+        data.serverUpdatedAt is timestamp;
+    }
+
+    function isValidSceneDoc(data, userId, seriesId, episodeId, sceneId) {
+      return data.keys().hasAll([
+          'id',
+          'episodeId',
+          'seriesId',
+          'ownerId',
+          'index',
+          'narration',
+          'onScreenText',
+          'visualPrompt',
+          'visualType',
+          'duration',
+          'transition',
+          'animation',
+          'mood',
+          'serverUpdatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'episodeId',
+          'seriesId',
+          'ownerId',
+          'index',
+          'narration',
+          'onScreenText',
+          'visualPrompt',
+          'visualAssetUrl',
+          'visualType',
+          'duration',
+          'transition',
+          'animation',
+          'mood',
+          'factCheck',
+          'quizQuestion',
+          'quizOptions',
+          'quizCorrectIndex',
+          'quizExplanation',
+          'serverUpdatedAt'
+        ]) &&
+        data.id is string && data.id == sceneId && isValidId(data.id) &&
+        data.episodeId is string && data.episodeId == episodeId && isValidId(data.episodeId) &&
+        data.seriesId is string && data.seriesId == seriesId && isValidId(data.seriesId) &&
+        data.ownerId is string && data.ownerId == userId && data.ownerId == request.auth.uid &&
+        data.index is int && data.index >= 0 && data.index <= 200 &&
+        data.narration is string && data.narration.size() <= 2000 &&
+        data.onScreenText is list && data.onScreenText.size() <= 6 &&
+        data.visualPrompt is string && data.visualPrompt.size() <= 1000 &&
+        (!('visualAssetUrl' in data) || (data.visualAssetUrl is string && data.visualAssetUrl.size() <= 60000)) &&
+        data.visualType in ['svg', 'aiImage', 'gradient', 'quizCard'] &&
+        data.duration is number && data.duration >= 1 && data.duration <= 300 &&
+        data.transition is string && data.transition.size() <= 32 &&
+        data.animation is string && data.animation.size() <= 32 &&
+        data.mood is string && data.mood.size() <= 32 &&
+        (!('quizOptions' in data) || (data.quizOptions is list && data.quizOptions.size() == 4)) &&
+        (!('quizCorrectIndex' in data) || (data.quizCorrectIndex is int && data.quizCorrectIndex >= 0 && data.quizCorrectIndex <= 3)) &&
+        data.serverUpdatedAt is timestamp;
+    }
+
+    function isValidGenerationJobDoc(data, userId, jobId) {
+      return data.keys().hasAll([
+          'id',
+          'seriesId',
+          'ownerId',
+          'type',
+          'status',
+          'progress',
+          'stageLabel',
+          'completedEpisodes',
+          'totalEpisodes',
+          'createdAt',
+          'updatedAt',
+          'serverUpdatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id',
+          'seriesId',
+          'ownerId',
+          'type',
+          'status',
+          'progress',
+          'stageLabel',
+          'completedEpisodes',
+          'totalEpisodes',
+          'failedEpisodeIds',
+          'error',
+          'createdAt',
+          'updatedAt',
+          'serverUpdatedAt'
+        ]) &&
+        data.id is string && data.id == jobId && isValidId(data.id) &&
+        data.seriesId is string && isValidId(data.seriesId) &&
+        data.ownerId is string && data.ownerId == userId && data.ownerId == request.auth.uid &&
+        data.type in ['fullSeries', 'episode', 'scene', 'assets', 'export'] &&
+        isValidSeriesStatus(data.status) &&
+        data.progress is int && data.progress >= 0 && data.progress <= 100 &&
+        data.stageLabel is string && data.stageLabel.size() <= 240 &&
+        data.completedEpisodes is int && data.completedEpisodes >= 0 && data.completedEpisodes <= 500 &&
+        data.totalEpisodes is int && data.totalEpisodes >= 1 && data.totalEpisodes <= 500 &&
+        (!('failedEpisodeIds' in data) || (data.failedEpisodeIds is list && data.failedEpisodeIds.size() <= 100)) &&
+        (!('error' in data) || (data.error is string && data.error.size() <= 400)) &&
+        data.createdAt is int && data.createdAt >= 0 &&
+        data.updatedAt is int && data.updatedAt >= 0 &&
         data.serverUpdatedAt is timestamp;
     }
 
@@ -372,6 +689,217 @@ service cloud.firestore {
             'serverUpdatedAt'
           ]);
         allow delete: if isOwner(userId) && isValidId(userId) && isValidId(presetId);
+      }
+
+      // 9. Unified Series Brand Identity Presets Subcollection
+      match /brandPresets/{brandPresetId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(brandPresetId);
+        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+        allow create: if isVerifiedUser() &&
+          isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(brandPresetId) &&
+          isValidBrandPresetDoc(incoming(), userId, brandPresetId) &&
+          incoming().serverUpdatedAt == request.time &&
+          exists(/databases/$(database)/documents/users/$(userId));
+        allow update: if isVerifiedUser() &&
+          isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(brandPresetId) &&
+          isValidBrandPresetDoc(incoming(), userId, brandPresetId) &&
+          incoming().id == existing().id &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().serverUpdatedAt == request.time &&
+          exists(/databases/$(database)/documents/users/$(userId)) &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'name',
+            'presetId',
+            'logo',
+            'primaryColors',
+            'secondaryColors',
+            'typography',
+            'narrator',
+            'music',
+            'intro',
+            'outro',
+            'subtitleStyle',
+            'lowerThirdStyle',
+            'updatedAt',
+            'serverUpdatedAt'
+          ]);
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(brandPresetId);
+      }
+
+      // 10. AI Video Series Collection + Nested Episodes + Nested Scenes
+      match /series/{seriesId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(seriesId);
+        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+        allow create: if isVerifiedUser() &&
+          isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(seriesId) &&
+          isValidSeriesDoc(incoming(), userId, seriesId) &&
+          incoming().serverUpdatedAt == request.time &&
+          exists(/databases/$(database)/documents/users/$(userId));
+        allow update: if isVerifiedUser() &&
+          isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(seriesId) &&
+          isValidSeriesDoc(incoming(), userId, seriesId) &&
+          incoming().id == existing().id &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().serverUpdatedAt == request.time &&
+          exists(/databases/$(database)/documents/users/$(userId)) &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'schemaVersion',
+            'name',
+            'topic',
+            'prompt',
+            'language',
+            'audience',
+            'status',
+            'episodeCount',
+            'isOpenEnded',
+            'scenesPerEpisode',
+            'targetDurationSec',
+            'stylePreset',
+            'format',
+            'brandPreset',
+            'activeJobId',
+            'error',
+            'updatedAt',
+            'serverUpdatedAt'
+          ]);
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(seriesId);
+
+        match /episodes/{episodeId} {
+          allow get: if isOwner(userId) && isValidId(userId) && isValidId(seriesId) && isValidId(episodeId);
+          allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+          allow create: if isVerifiedUser() &&
+            isOwner(userId) &&
+            isValidId(userId) &&
+            isValidId(seriesId) &&
+            isValidId(episodeId) &&
+            isValidEpisodeDoc(incoming(), userId, seriesId, episodeId) &&
+            incoming().serverUpdatedAt == request.time &&
+            exists(/databases/$(database)/documents/users/$(userId)/series/$(seriesId));
+          allow update: if isVerifiedUser() &&
+            isOwner(userId) &&
+            isValidId(userId) &&
+            isValidId(seriesId) &&
+            isValidId(episodeId) &&
+            isValidEpisodeDoc(incoming(), userId, seriesId, episodeId) &&
+            incoming().id == existing().id &&
+            incoming().seriesId == existing().seriesId &&
+            incoming().ownerId == existing().ownerId &&
+            incoming().serverUpdatedAt == request.time &&
+            exists(/databases/$(database)/documents/users/$(userId)/series/$(seriesId)) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'index',
+              'title',
+              'titleOptions',
+              'hook',
+              'script',
+              'duration',
+              'status',
+              'thumbnail',
+              'thumbnailConcepts',
+              'narration',
+              'music',
+              'captions',
+              'publishKit',
+              'exportSettings',
+              'projectRef',
+              'factReviewSummary',
+              'error',
+              'updatedAt',
+              'serverUpdatedAt'
+            ]);
+          allow delete: if isOwner(userId) && isValidId(userId) && isValidId(seriesId) && isValidId(episodeId);
+
+          match /scenes/{sceneId} {
+            allow get: if isOwner(userId) && isValidId(userId) && isValidId(seriesId) && isValidId(episodeId) && isValidId(sceneId);
+            allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+            allow create: if isVerifiedUser() &&
+              isOwner(userId) &&
+              isValidId(userId) &&
+              isValidId(seriesId) &&
+              isValidId(episodeId) &&
+              isValidId(sceneId) &&
+              isValidSceneDoc(incoming(), userId, seriesId, episodeId, sceneId) &&
+              incoming().serverUpdatedAt == request.time &&
+              exists(/databases/$(database)/documents/users/$(userId)/series/$(seriesId)/episodes/$(episodeId));
+            allow update: if isVerifiedUser() &&
+              isOwner(userId) &&
+              isValidId(userId) &&
+              isValidId(seriesId) &&
+              isValidId(episodeId) &&
+              isValidId(sceneId) &&
+              isValidSceneDoc(incoming(), userId, seriesId, episodeId, sceneId) &&
+              incoming().id == existing().id &&
+              incoming().episodeId == existing().episodeId &&
+              incoming().seriesId == existing().seriesId &&
+              incoming().ownerId == existing().ownerId &&
+              incoming().serverUpdatedAt == request.time &&
+              exists(/databases/$(database)/documents/users/$(userId)/series/$(seriesId)/episodes/$(episodeId)) &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'index',
+                'narration',
+                'onScreenText',
+                'visualPrompt',
+                'visualAssetUrl',
+                'visualType',
+                'duration',
+                'transition',
+                'animation',
+                'mood',
+                'factCheck',
+                'quizQuestion',
+                'quizOptions',
+                'quizCorrectIndex',
+                'quizExplanation',
+                'serverUpdatedAt'
+              ]);
+            allow delete: if isOwner(userId) && isValidId(userId) && isValidId(seriesId) && isValidId(episodeId) && isValidId(sceneId);
+          }
+        }
+      }
+
+      // 11. Generation Jobs Tracker Subcollection
+      match /generationJobs/{jobId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(jobId);
+        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+        allow create: if isVerifiedUser() &&
+          isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(jobId) &&
+          isValidGenerationJobDoc(incoming(), userId, jobId) &&
+          incoming().serverUpdatedAt == request.time &&
+          exists(/databases/$(database)/documents/users/$(userId));
+        allow update: if isVerifiedUser() &&
+          isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(jobId) &&
+          isValidGenerationJobDoc(incoming(), userId, jobId) &&
+          incoming().id == existing().id &&
+          incoming().seriesId == existing().seriesId &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().serverUpdatedAt == request.time &&
+          exists(/databases/$(database)/documents/users/$(userId)) &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'status',
+            'progress',
+            'stageLabel',
+            'completedEpisodes',
+            'totalEpisodes',
+            'failedEpisodeIds',
+            'error',
+            'updatedAt',
+            'serverUpdatedAt'
+          ]);
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(jobId);
       }
     }
   }

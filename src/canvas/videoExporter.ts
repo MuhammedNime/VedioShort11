@@ -41,6 +41,13 @@ import {
   setClawatarExportMode,
   stepClawatarAtGlobalTime,
 } from './presenterRenderer';
+import {
+  beginBackgroundTask,
+  createWorkerTicker,
+  endBackgroundTask,
+  unthrottledSleepMs,
+  updateBackgroundTaskProgress,
+} from '../services/backgroundKeepAlive';
 
 export type ExportFormatPreference = 'auto' | 'webm' | 'mp4';
 export type ExportResolutionPreference = 'auto' | '720p' | '1080p';
@@ -86,9 +93,7 @@ interface DimensionsPlan {
 const EXPORT_FPS = 30;
 
 function sleepMs(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
+  return unthrottledSleepMs(ms);
 }
 
 function isAppleBrowser(): boolean {
@@ -857,7 +862,7 @@ async function encodeWithWebCodecsPlan(
       new Promise<never>((_, reject) => {
         window.setTimeout(
           () => reject(new Error('انتهت مهلة إتمام ترميز الفيديو.')),
-          15_000
+          45_000
         );
       }),
     ]);
@@ -927,6 +932,53 @@ export async function exportQuizVideo(
     throw new Error('لا توجد أسئلة صالحة للتصدير.');
   }
 
+  const bgTaskId = `video-export-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  let lastBgPct = 1;
+  beginBackgroundTask(bgTaskId, 'جارٍ تصدير الفيديو...', 1);
+  const emitProgress = (p: ExportProgress) => {
+    const pct = Math.max(0, Math.min(100, Math.round((p.progress || 0) * 100)));
+    if (pct !== lastBgPct) {
+      lastBgPct = pct;
+      updateBackgroundTaskProgress(bgTaskId, p.statusText || 'جارٍ تصدير الفيديو...', pct);
+    }
+    onProgress(p);
+  };
+
+  let succeeded = false;
+  try {
+    const result = await exportQuizVideoCore(
+      slides,
+      template,
+      timing,
+      audio,
+      emitProgress,
+      signal,
+      options
+    );
+    succeeded = true;
+    return result;
+  } finally {
+    endBackgroundTask(
+      bgTaskId,
+      succeeded
+        ? {
+            title: 'اكتمل تصدير الفيديو',
+            body: 'أصبح ملف الفيديو جاهزاً للحفظ أو النشر في استوديو كويز برو.',
+          }
+        : undefined
+    );
+  }
+}
+
+async function exportQuizVideoCore(
+  slides: QuestionSlide[],
+  template: TemplateSettings,
+  timing: TimingSettings,
+  audio: AudioSettings,
+  onProgress: (p: ExportProgress) => void,
+  signal: AbortSignal,
+  options?: ExportVideoOptions
+): Promise<ExportResult> {
   const checkAborted = () => {
     if (signal.aborted) {
       throw new Error('تم إلغاء التصدير.');
@@ -1241,6 +1293,7 @@ export async function exportQuizVideo(
       let timerId = 0;
       let stopWatchdogId = 0;
       let stallCheckIntervalId = 0;
+      let stopWorkerTicker: (() => void) | null = null;
       let rafId = 0;
       let cleanedUp = false;
       let settled = false;
@@ -1251,6 +1304,8 @@ export async function exportQuizVideo(
         window.clearTimeout(timerId);
         window.clearTimeout(stopWatchdogId);
         window.clearInterval(stallCheckIntervalId);
+        stopWorkerTicker?.();
+        stopWorkerTicker = null;
         cancelAnimationFrame(rafId);
         try {
           keepAliveOsc?.stop();
@@ -1574,11 +1629,15 @@ export async function exportQuizVideo(
         stallCheckIntervalId = window.setInterval(() => {
           if (settled || finishing || cleanedUp) return;
           const nowP = performance.now();
-          if (nowP - lastRenderTickPerf > 4500) {
+          const isHidden = typeof document !== 'undefined' && document.hidden;
+          // Do not abort during screen-off / backgrounded state while Worker ticker is driving frames
+          const renderStallLimitMs = isHidden ? 45_000 : 8_000;
+          const chunkStallLimitMs = isHidden ? 45_000 : 9_000;
+          if (nowP - lastRenderTickPerf > renderStallLimitMs) {
             finishError('توقف تحديث الإطارات أثناء التسجيل.');
             return;
           }
-          if (totalDuration > 4 && nowP - lastChunkPerf > 5000 && chunks.length === 0) {
+          if (totalDuration > 4 && nowP - lastChunkPerf > chunkStallLimitMs && chunks.length === 0) {
             finishError('لم يخرج مسجل المتصفح أي بيانات فيديو (MediaRecorder).');
           }
         }, 700);
@@ -1676,6 +1735,7 @@ export async function exportQuizVideo(
           timerId = window.setTimeout(stepFrame, msToNext);
         };
 
+        stopWorkerTicker = createWorkerTicker(Math.round(1000 / EXPORT_FPS), stepFrame);
         rafId = requestAnimationFrame(stepFrame);
         timerId = window.setTimeout(stepFrame, 33);
       };

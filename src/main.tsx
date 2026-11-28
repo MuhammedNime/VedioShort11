@@ -1,6 +1,6 @@
 import {createRoot} from 'react-dom/client';
 import {registerSW} from 'virtual:pwa-register';
-import App from './App.tsx';
+import {StudioRouter} from './StudioRouter.tsx';
 import {ErrorBoundary} from './components/ErrorBoundary.tsx';
 import './index.css';
 
@@ -22,6 +22,6 @@ if (typeof window !== 'undefined' && !isCapacitorNative && 'serviceWorker' in na
 
 createRoot(document.getElementById('root')!).render(
   <ErrorBoundary>
-    <App />
+    <StudioRouter />
   </ErrorBoundary>
 );

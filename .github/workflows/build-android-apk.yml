@@ -72,13 +72,14 @@ jobs:
 
           mkdir -p android/app/src/main/java/com/quizpro/reelsstudio1
           cp android-native/MainActivity.java android/app/src/main/java/com/quizpro/reelsstudio1/MainActivity.java
+          cp android-native/BackgroundWorkService.java android/app/src/main/java/com/quizpro/reelsstudio1/BackgroundWorkService.java
           mkdir -p android/app/src/main/res/xml
           cp android-native/file_paths.xml android/app/src/main/res/xml/file_paths.xml
 
           node -e '
             const fs = require("fs");
 
-            // 1. Patch AndroidManifest.xml with required permissions, optional hardware features, and unique deep-link scheme
+            // 1. Patch AndroidManifest.xml with required permissions, foreground service, optional hardware features, and unique deep-link scheme
             const manifestPath = "android/app/src/main/AndroidManifest.xml";
             let m = fs.readFileSync(manifestPath, "utf8");
             if (!m.includes("android:usesCleartextTraffic")) {
@@ -93,9 +94,20 @@ jobs:
                 "            <intent-filter>\n                <action android:name=\"android.intent.action.VIEW\" />\n                <category android:name=\"android.intent.category.DEFAULT\" />\n                <category android:name=\"android.intent.category.BROWSABLE\" />\n                <data android:scheme=\"com.quizpro.reelsstudio1\" android:host=\"youtube-auth\" />\n            </intent-filter>\n        </activity>"
               );
             }
+            if (!m.includes("BackgroundWorkService")) {
+              m = m.replace(
+                "</application>",
+                "        <service\n            android:name=\"com.quizpro.reelsstudio1.BackgroundWorkService\"\n            android:exported=\"false\"\n            android:foregroundServiceType=\"dataSync\" />\n    </application>"
+              );
+            }
             const manifestAdditions = [
               "<uses-permission android:name=\"android.permission.RECORD_AUDIO\" />",
               "<uses-permission android:name=\"android.permission.MODIFY_AUDIO_SETTINGS\" />",
+              "<uses-permission android:name=\"android.permission.WAKE_LOCK\" />",
+              "<uses-permission android:name=\"android.permission.FOREGROUND_SERVICE\" />",
+              "<uses-permission android:name=\"android.permission.FOREGROUND_SERVICE_DATA_SYNC\" />",
+              "<uses-permission android:name=\"android.permission.POST_NOTIFICATIONS\" />",
+              "<uses-permission android:name=\"android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS\" />",
               "<uses-permission android:name=\"android.permission.WRITE_EXTERNAL_STORAGE\" android:maxSdkVersion=\"28\" />",
               "<uses-feature android:name=\"android.hardware.microphone\" android:required=\"false\" />"
             ];

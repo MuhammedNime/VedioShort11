@@ -816,10 +816,11 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
 
   const dims = getCanvasDimensions(project.template);
   const isWideRatio = project.template.aspectRatio === '16:9';
-  const ratioLabel = isWideRatio ? '16:9' : '9:16';
+  const isSquareRatio = project.template.aspectRatio === '1:1';
+  const ratioLabel = isWideRatio ? '16:9' : isSquareRatio ? '1:1' : '9:16';
   const effectiveYtError = ytError || ytAuthError;
-  const miniPreviewW = isWideRatio ? 240 : 135;
-  const miniPreviewH = isWideRatio ? 135 : 240;
+  const miniPreviewW = isWideRatio ? 240 : isSquareRatio ? 180 : 135;
+  const miniPreviewH = isWideRatio ? 135 : isSquareRatio ? 180 : 240;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-3 sm:p-4">

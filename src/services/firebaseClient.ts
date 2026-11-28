@@ -46,6 +46,8 @@ import {
   loadCustomPresetsAsync,
   mergeCustomPresetsVault,
 } from '../storage/customPresets';
+import { BrandPreset, Episode, GenerationJob, Scene, Series } from '../types/series';
+import { migrateBrandPresetSchema, migrateSeriesSchema } from '../series/migrations';
 
 const CLOUD_SYNC_META_KEY = 'quizpro_cloud_sync_meta_v1';
 
@@ -940,7 +942,12 @@ function buildCloudProjectDocData(project: QuizProject, uid: string): {
       name: safeName,
       schemaVersion: Math.max(1, Math.min(30, Math.round(safeProject.schemaVersion || 9))),
       preferredAiVoice: safeVoice,
-      aspectRatio: safeProject.template.aspectRatio === '16:9' ? '16:9' : '9:16',
+      aspectRatio:
+        safeProject.template.aspectRatio === '16:9'
+          ? '16:9'
+          : safeProject.template.aspectRatio === '1:1'
+            ? '1:1'
+            : '9:16',
       slideCount: Math.max(1, Math.min(50, safeProject.slides.length)),
       projectJson: json.slice(0, 650_000),
       updatedAt: safeUpdatedAt,
@@ -1340,5 +1347,254 @@ export async function syncFullWorkspaceWithCloud(
     return await run;
   } finally {
     inFlightWorkspaceSyncs.delete(user.uid);
+  }
+}
+
+function sanitizeSeriesBrandForFirestore(brand: BrandPreset): Record<string, unknown> {
+  return {
+    id: sanitizeFirestoreId(brand.id),
+    name: (brand.name || 'هوية القناة').slice(0, 120),
+    presetId: (brand.presetId || 'quizProSignature').slice(0, 64),
+    logo: {
+      ...(brand.logo.dataUrl && brand.logo.dataUrl.length <= 24_000
+        ? { dataUrl: brand.logo.dataUrl }
+        : {}),
+      ...(brand.logo.name ? { name: brand.logo.name.slice(0, 80) } : {}),
+      position: brand.logo.position || 'topRight',
+      size: Math.max(48, Math.min(240, Math.round(brand.logo.size || 108))),
+    },
+    primaryColors: brand.primaryColors,
+    secondaryColors: brand.secondaryColors,
+    typography: brand.typography,
+    narrator: brand.narrator,
+    music: brand.music,
+    intro: brand.intro,
+    outro: brand.outro,
+    subtitleStyle: brand.subtitleStyle,
+    lowerThirdStyle: brand.lowerThirdStyle,
+  };
+}
+
+export async function pushBrandPresetToCloud(preset: BrandPreset): Promise<boolean> {
+  const user = firebaseAuth.currentUser;
+  if (!user || !user.emailVerified) return false;
+  await ensureFirestoreUserProfile(user);
+  const safeId = sanitizeFirestoreId(preset.id);
+  const docPath = `users/${user.uid}/brandPresets/${safeId}`;
+  try {
+    await setDoc(doc(firestoreDb, 'users', user.uid, 'brandPresets', safeId), {
+      ...sanitizeSeriesBrandForFirestore(preset),
+      id: safeId,
+      ownerId: user.uid,
+      updatedAt: Math.floor(Date.now()),
+      serverUpdatedAt: serverTimestamp(),
+    });
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, docPath);
+  }
+}
+
+export async function pushGenerationJobToCloud(job: GenerationJob): Promise<boolean> {
+  const user = firebaseAuth.currentUser;
+  if (!user || !user.emailVerified) return false;
+  await ensureFirestoreUserProfile(user);
+  const safeJobId = sanitizeFirestoreId(job.id);
+  const safeSeriesId = sanitizeFirestoreId(job.seriesId);
+  const docPath = `users/${user.uid}/generationJobs/${safeJobId}`;
+  try {
+    await setDoc(doc(firestoreDb, 'users', user.uid, 'generationJobs', safeJobId), {
+      id: safeJobId,
+      seriesId: safeSeriesId,
+      ownerId: user.uid,
+      type: job.type,
+      status: job.status,
+      progress: Math.max(0, Math.min(100, Math.round(job.progress))),
+      stageLabel: (job.stageLabel || '').slice(0, 240),
+      completedEpisodes: Math.max(0, Math.min(500, Math.round(job.completedEpisodes))),
+      totalEpisodes: Math.max(1, Math.min(500, Math.round(job.totalEpisodes))),
+      failedEpisodeIds: (job.failedEpisodeIds || []).map(sanitizeFirestoreId).slice(0, 100),
+      ...(job.error ? { error: job.error.slice(0, 400) } : {}),
+      createdAt: Math.max(0, Math.floor(job.createdAt || Date.now())),
+      updatedAt: Math.max(0, Math.floor(job.updatedAt || Date.now())),
+      serverUpdatedAt: serverTimestamp(),
+    });
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, docPath);
+  }
+}
+
+export async function pushSeriesToCloud(series: Series): Promise<boolean> {
+  const user = firebaseAuth.currentUser;
+  if (!user || !user.emailVerified) return false;
+  await ensureFirestoreUserProfile(user);
+
+  const safeSeriesId = sanitizeFirestoreId(series.id);
+  const seriesRef = doc(firestoreDb, 'users', user.uid, 'series', safeSeriesId);
+  const seriesPath = `users/${user.uid}/series/${safeSeriesId}`;
+
+  try {
+    await setDoc(seriesRef, {
+      id: safeSeriesId,
+      ownerId: user.uid,
+      schemaVersion: Math.max(1, Math.min(20, Math.round(series.schemaVersion || 1))),
+      name: (series.name || 'سلسلة فيديو').slice(0, 140),
+      topic: (series.topic || 'موضوع عام').slice(0, 400),
+      prompt: (series.prompt || '').slice(0, 600),
+      language: series.language,
+      audience: series.audience,
+      status: series.status,
+      episodeCount: Math.max(1, Math.min(500, Math.round(series.episodeCount || 1))),
+      isOpenEnded: Boolean(series.isOpenEnded),
+      scenesPerEpisode: Math.max(0, Math.min(30, Math.round(series.scenesPerEpisode || 0))),
+      targetDurationSec: Math.max(15, Math.min(600, Math.round(series.targetDurationSec || 45))),
+      stylePreset: series.stylePreset,
+      format: series.format,
+      brandPreset: sanitizeSeriesBrandForFirestore(series.brandPreset),
+      ...(series.activeJobId ? { activeJobId: sanitizeFirestoreId(series.activeJobId) } : {}),
+      ...(series.error ? { error: series.error.slice(0, 400) } : {}),
+      createdAt: Math.max(0, Math.floor(series.createdAt || Date.now())),
+      updatedAt: Math.max(0, Math.floor(series.updatedAt || Date.now())),
+      serverUpdatedAt: serverTimestamp(),
+    });
+
+    for (const ep of series.episodes.slice(0, 500)) {
+      const safeEpId = sanitizeFirestoreId(ep.id);
+      const epRef = doc(firestoreDb, 'users', user.uid, 'series', safeSeriesId, 'episodes', safeEpId);
+      await setDoc(epRef, {
+        id: safeEpId,
+        seriesId: safeSeriesId,
+        ownerId: user.uid,
+        index: Math.max(0, Math.min(500, Math.round(ep.index))),
+        title: (ep.title || 'حلقة').slice(0, 160),
+        titleOptions: (ep.titleOptions || [ep.title || 'حلقة']).slice(0, 4).map((t) => t.slice(0, 160)),
+        hook: (ep.hook || '').slice(0, 400),
+        script: (ep.script || '').slice(0, 12000),
+        duration: Math.max(5, Math.min(3600, Number(ep.duration) || 35)),
+        status: ep.status,
+        thumbnail: ep.thumbnail,
+        thumbnailConcepts: (ep.thumbnailConcepts || []).slice(0, 4),
+        narration: ep.narration,
+        music: ep.music,
+        captions: (ep.captions || []).slice(0, 120),
+        publishKit: {
+          title: (ep.publishKit.title || '').slice(0, 140),
+          description: (ep.publishKit.description || '').slice(0, 2000),
+          hashtags: (ep.publishKit.hashtags || []).slice(0, 12),
+          tags: (ep.publishKit.tags || []).slice(0, 20),
+          pinnedComment: (ep.publishKit.pinnedComment || '').slice(0, 400),
+        },
+        exportSettings: ep.exportSettings,
+        ...(ep.projectRef ? { projectRef: sanitizeFirestoreId(ep.projectRef) } : {}),
+        ...(ep.factReviewSummary ? { factReviewSummary: ep.factReviewSummary } : {}),
+        ...(ep.error ? { error: ep.error.slice(0, 400) } : {}),
+        updatedAt: Math.max(0, Math.floor(ep.updatedAt || Date.now())),
+        serverUpdatedAt: serverTimestamp(),
+      });
+
+      const batch = writeBatch(firestoreDb);
+      for (const sc of ep.scenes.slice(0, 30)) {
+        const safeScId = sanitizeFirestoreId(sc.id);
+        const scRef = doc(
+          firestoreDb,
+          'users',
+          user.uid,
+          'series',
+          safeSeriesId,
+          'episodes',
+          safeEpId,
+          'scenes',
+          safeScId
+        );
+        batch.set(scRef, {
+          id: safeScId,
+          episodeId: safeEpId,
+          seriesId: safeSeriesId,
+          ownerId: user.uid,
+          index: Math.max(0, Math.min(200, Math.round(sc.index))),
+          narration: (sc.narration || '').slice(0, 2000),
+          onScreenText: (sc.onScreenText || []).slice(0, 6),
+          visualPrompt: (sc.visualPrompt || '').slice(0, 1000),
+          ...(sc.visualAssetUrl && sc.visualAssetUrl.length <= 58_000
+            ? { visualAssetUrl: sc.visualAssetUrl }
+            : {}),
+          visualType: sc.visualType,
+          duration: Math.max(1, Math.min(300, Number(sc.duration) || 8)),
+          transition: (sc.transition || 'fade').slice(0, 32),
+          animation: (sc.animation || 'zoomIn').slice(0, 32),
+          mood: (sc.mood || 'curious').slice(0, 32),
+          ...(sc.factCheck ? { factCheck: sc.factCheck } : {}),
+          ...(sc.quizQuestion ? { quizQuestion: sc.quizQuestion } : {}),
+          ...(sc.quizOptions ? { quizOptions: sc.quizOptions } : {}),
+          ...(typeof sc.quizCorrectIndex === 'number'
+            ? { quizCorrectIndex: sc.quizCorrectIndex }
+            : {}),
+          ...(sc.quizExplanation ? { quizExplanation: sc.quizExplanation } : {}),
+          serverUpdatedAt: serverTimestamp(),
+        });
+      }
+      await batch.commit();
+    }
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, seriesPath);
+  }
+}
+
+export async function listCloudSeries(): Promise<Series[]> {
+  const user = firebaseAuth.currentUser;
+  if (!user) return [];
+  const path = `users/${user.uid}/series`;
+  try {
+    const sq = query(
+      collection(firestoreDb, 'users', user.uid, 'series'),
+      where('ownerId', '==', user.uid)
+    );
+    const snap = await getDocs(sq);
+    const out: Series[] = [];
+    for (const sDoc of snap.docs) {
+      const sData = sDoc.data();
+      const epsSnap = await getDocs(
+        query(
+          collection(firestoreDb, 'users', user.uid, 'series', sDoc.id, 'episodes'),
+          where('ownerId', '==', user.uid)
+        )
+      );
+      const episodes: Episode[] = [];
+      for (const eDoc of epsSnap.docs) {
+        const eData = eDoc.data();
+        const scSnap = await getDocs(
+          query(
+            collection(
+              firestoreDb,
+              'users',
+              user.uid,
+              'series',
+              sDoc.id,
+              'episodes',
+              eDoc.id,
+              'scenes'
+            ),
+            where('ownerId', '==', user.uid)
+          )
+        );
+        const scenes: Scene[] = scSnap.docs
+          .map((sd) => sd.data() as unknown as Scene)
+          .sort((a, b) => (a.index || 0) - (b.index || 0));
+        episodes.push({ ...(eData as unknown as Episode), scenes });
+      }
+      episodes.sort((a, b) => (a.index || 0) - (b.index || 0));
+      out.push(
+        migrateSeriesSchema({
+          ...sData,
+          brandPreset: migrateBrandPresetSchema(sData.brandPreset),
+          episodes,
+        })
+      );
+    }
+    return out.sort((a, b) => b.updatedAt - a.updatedAt);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
   }
 }

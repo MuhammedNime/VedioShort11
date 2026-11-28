@@ -8,7 +8,7 @@ export type OptionAppearEffect =
   | 'glowFlash'
   | 'shakeAndZoom';
 
-export type VideoAspectRatio = '9:16' | '16:9';
+export type VideoAspectRatio = '9:16' | '16:9' | '1:1';
 
 export type RevealStyle =
   | 'highlightGlow'
@@ -1287,6 +1287,9 @@ export function getCanvasDimensions(template?: Pick<TemplateSettings, 'aspectRat
 } {
   if (template?.aspectRatio === '16:9') {
     return { width: 1920, height: 1080 };
+  }
+  if (template?.aspectRatio === '1:1') {
+    return { width: 1080, height: 1080 };
   }
   return { width: 1080, height: 1920 };
 }

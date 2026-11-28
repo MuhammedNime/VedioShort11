@@ -1,8 +1,10 @@
 package com.quizpro.reelsstudio1;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.content.ContentResolver;
 import android.content.ContentValues;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.media.MediaScannerConnection;
@@ -10,7 +12,9 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.PowerManager;
 import android.provider.MediaStore;
+import android.provider.Settings;
 import android.util.Base64;
 import android.view.View;
 import android.webkit.DownloadListener;
@@ -44,6 +48,8 @@ public class MainActivity extends BridgeActivity {
     private static final int REQUEST_APP_PERMISSIONS = 1001;
     private long lastBackPressAt = 0L;
     private volatile String pendingYouTubeAuthUrl = null;
+    private volatile boolean isInForeground = true;
+    private volatile boolean backgroundWorkActive = false;
 
     private static class PendingUpload {
         final File tempFile;
@@ -110,8 +116,45 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onStart() {
         super.onStart();
+        isInForeground = true;
         attachBridgeAndListeners();
         flushPendingYouTubeAuth();
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        isInForeground = true;
+        if (this.bridge != null && this.bridge.getWebView() != null) {
+            this.bridge.getWebView().resumeTimers();
+        }
+    }
+
+    @Override
+    public void onPause() {
+        isInForeground = false;
+        super.onPause();
+        // Keep WebView JS timers, network requests, and WebCodecs running in background
+        // when generation or video export is active (e.g., screen locked or app minimized).
+        if (backgroundWorkActive && this.bridge != null && this.bridge.getWebView() != null) {
+            WebView webView = this.bridge.getWebView();
+            webView.onResume();
+            webView.resumeTimers();
+        }
+    }
+
+    @Override
+    public void onDestroy() {
+        if (backgroundWorkActive) {
+            try {
+                Intent stopIntent = new Intent(this, BackgroundWorkService.class);
+                stopIntent.setAction(BackgroundWorkService.ACTION_STOP);
+                startService(stopIntent);
+            } catch (Exception ignored) {
+                // ignore
+            }
+        }
+        super.onDestroy();
     }
 
     @Override
@@ -188,6 +231,12 @@ public class MainActivity extends BridgeActivity {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED) {
             needed.add(Manifest.permission.RECORD_AUDIO);
+        }
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (ContextCompat.checkSelfPermission(this, "android.permission.POST_NOTIFICATIONS")
+                    != PackageManager.PERMISSION_GRANTED) {
+                needed.add("android.permission.POST_NOTIFICATIONS");
+            }
         }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
@@ -473,6 +522,99 @@ public class MainActivity extends BridgeActivity {
     }
 
     public class AndroidNativeBridge {
+        @JavascriptInterface
+        public boolean startBackgroundWork(String label) {
+            backgroundWorkActive = true;
+            try {
+                Intent svc = new Intent(MainActivity.this, BackgroundWorkService.class);
+                svc.setAction(BackgroundWorkService.ACTION_START_OR_UPDATE);
+                svc.putExtra(BackgroundWorkService.EXTRA_LABEL, label != null ? label : "جارٍ التنفيذ في الخلفية...");
+                svc.putExtra(BackgroundWorkService.EXTRA_PROGRESS, -1);
+                ContextCompat.startForegroundService(MainActivity.this, svc);
+                runOnUiThread(() -> {
+                    if (bridge != null && bridge.getWebView() != null) {
+                        bridge.getWebView().resumeTimers();
+                    }
+                });
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        @JavascriptInterface
+        public boolean updateBackgroundWorkProgress(String label, int progressPct) {
+            if (!backgroundWorkActive) {
+                return startBackgroundWork(label);
+            }
+            try {
+                Intent svc = new Intent(MainActivity.this, BackgroundWorkService.class);
+                svc.setAction(BackgroundWorkService.ACTION_START_OR_UPDATE);
+                svc.putExtra(BackgroundWorkService.EXTRA_LABEL, label != null ? label : "جارٍ التنفيذ في الخلفية...");
+                svc.putExtra(BackgroundWorkService.EXTRA_PROGRESS, Math.max(-1, Math.min(100, progressPct)));
+                ContextCompat.startForegroundService(MainActivity.this, svc);
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        @JavascriptInterface
+        public boolean stopBackgroundWork(String completionTitle, String completionBody) {
+            backgroundWorkActive = false;
+            try {
+                Intent svc = new Intent(MainActivity.this, BackgroundWorkService.class);
+                svc.setAction(BackgroundWorkService.ACTION_STOP);
+                startService(svc);
+            } catch (Exception ignored) {
+                // ignore
+            }
+            if (!isInForeground && completionTitle != null && !completionTitle.trim().isEmpty()) {
+                BackgroundWorkService.postCompletionNotification(MainActivity.this, completionTitle, completionBody);
+            }
+            return true;
+        }
+
+        @JavascriptInterface
+        public boolean isIgnoringBatteryOptimizations() {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true;
+            try {
+                PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                return pm != null && pm.isIgnoringBatteryOptimizations(getPackageName());
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        @SuppressLint("BatteryLife")
+        @JavascriptInterface
+        public boolean requestIgnoreBatteryOptimizations() {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true;
+            try {
+                PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                if (pm != null && pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                    return true;
+                }
+                runOnUiThread(() -> {
+                    try {
+                        Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                        intent.setData(Uri.parse("package:" + getPackageName()));
+                        startActivity(intent);
+                    } catch (Exception ex) {
+                        try {
+                            Intent fallback = new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
+                            startActivity(fallback);
+                        } catch (Exception ignored) {
+                            // ignore
+                        }
+                    }
+                });
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
         @JavascriptInterface
         public boolean requestAudioPermission() {
             if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.RECORD_AUDIO)

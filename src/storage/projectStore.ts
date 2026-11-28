@@ -738,7 +738,12 @@ export function normalizeLoadedProject(
   mergedTemplate = {
     ...DEFAULT_TEMPLATE,
     ...mergedTemplate,
-    aspectRatio: mergedTemplate.aspectRatio === '16:9' ? '16:9' : '9:16',
+    aspectRatio:
+      mergedTemplate.aspectRatio === '16:9'
+        ? '16:9'
+        : mergedTemplate.aspectRatio === '1:1'
+          ? '1:1'
+          : '9:16',
     timerMatchBackground: mergedTemplate.timerMatchBackground ?? true,
     useTimerVideo: mergedTemplate.useTimerVideo ?? true,
     boxGloss: mergedTemplate.boxGloss ?? true,
@@ -1187,7 +1192,12 @@ function toSummary(project: QuizProject): ProjectSummary {
     id: project.id,
     name: project.name || 'مشروع بدون اسم',
     slideCount: project.slides.length,
-    aspectRatio: project.template.aspectRatio === '16:9' ? '16:9' : '9:16',
+    aspectRatio:
+      project.template.aspectRatio === '16:9'
+        ? '16:9'
+        : project.template.aspectRatio === '1:1'
+          ? '1:1'
+          : '9:16',
     updatedAt: project.updatedAt || Date.now(),
   };
 }

@@ -7,6 +7,7 @@ import {
   Crown,
   Download,
   ImagePlus,
+  Layers,
   LayoutGrid,
   LayoutTemplate,
   Loader2,
@@ -1563,37 +1564,49 @@ export const TemplateDesignPanel: React.FC<TemplateDesignPanelProps> = ({
         {renderAccordionHeader(
           'format',
           '2. نوع الفيديو والحرية الكاملة',
-          `${template.aspectRatio === '16:9' ? '16:9 أفقي' : '9:16 شورتس'}${
+          `${template.aspectRatio === '16:9' ? '16:9 أفقي' : template.aspectRatio === '1:1' ? '1:1 مربع' : '9:16 شورتس'}${
             template.freeLayoutMode ? ' · حر' : ''
           }`,
           template.aspectRatio === '16:9' ? Monitor : Smartphone
         )}
         {isSectionOpen('format') && (
           <div className="p-3.5 border-t border-[var(--pline)] flex flex-col gap-3">
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <button
                 type="button"
                 onClick={() => patch({ aspectRatio: '9:16' })}
-                className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl border text-xs font-bold transition-colors cursor-pointer ${
-                  template.aspectRatio !== '16:9'
+                className={`flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl border text-xs font-bold transition-colors cursor-pointer ${
+                  template.aspectRatio === '9:16'
                     ? 'bg-[#00B050]/18 border-[#00B050] text-[#00B050] dark:text-[#6ee7b7]'
                     : 'bg-[var(--surface)] border-[var(--pline)] text-[var(--ptxt)] hover:border-[var(--gold)]'
                 }`}
               >
-                <Smartphone className="w-4 h-4" />
-                <span>شورتس 9:16 عمودي</span>
+                <Smartphone className="w-4 h-4 shrink-0" />
+                <span>9:16 عمودي</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => patch({ aspectRatio: '1:1' })}
+                className={`flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl border text-xs font-bold transition-colors cursor-pointer ${
+                  template.aspectRatio === '1:1'
+                    ? 'bg-[#00B050]/18 border-[#00B050] text-[#00B050] dark:text-[#6ee7b7]'
+                    : 'bg-[var(--surface)] border-[var(--pline)] text-[var(--ptxt)] hover:border-[var(--gold)]'
+                }`}
+              >
+                <Layers className="w-4 h-4 shrink-0" />
+                <span>1:1 مربع</span>
               </button>
               <button
                 type="button"
                 onClick={() => patch({ aspectRatio: '16:9' })}
-                className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl border text-xs font-bold transition-colors cursor-pointer ${
+                className={`flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl border text-xs font-bold transition-colors cursor-pointer ${
                   template.aspectRatio === '16:9'
                     ? 'bg-[#00B050]/18 border-[#00B050] text-[#00B050] dark:text-[#6ee7b7]'
                     : 'bg-[var(--surface)] border-[var(--pline)] text-[var(--ptxt)] hover:border-[var(--gold)]'
                 }`}
               >
-                <Monitor className="w-4 h-4" />
-                <span>فيديو طويل 16:9 أفقي</span>
+                <Monitor className="w-4 h-4 shrink-0" />
+                <span>16:9 أفقي</span>
               </button>
             </div>
 

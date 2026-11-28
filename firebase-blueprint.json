@@ -2,265 +2,226 @@
   "entities": {
     "UserProfile": {
       "title": "UserProfile",
-      "description": "Authenticated studio user profile document used as parent gate for private question banks and folders.",
+      "description": "Authenticated studio user profile document used as parent gate for private question banks, projects, and series.",
       "type": "object",
       "properties": {
-        "uid": {
-          "type": "string",
-          "description": "Firebase Auth UID matching the document ID."
-        },
-        "email": {
-          "type": "string",
-          "format": "email",
-          "description": "Verified Google account email address."
-        },
-        "displayName": {
-          "type": "string",
-          "description": "User or channel display name."
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Server timestamp when user profile was first created."
-        },
-        "updatedAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Server timestamp when user profile was last updated."
-        }
+        "uid": { "type": "string", "description": "Firebase Auth UID matching the document ID." },
+        "email": { "type": "string", "format": "email", "description": "Verified Google account email address." },
+        "displayName": { "type": "string", "description": "User or channel display name." },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["uid", "email", "displayName", "createdAt", "updatedAt"]
     },
     "BankFolder": {
       "title": "BankFolder",
-      "description": "Hierarchical nested folder for organizing questions (folders inside folders).",
+      "description": "Hierarchical nested folder for organizing questions.",
       "type": "object",
       "properties": {
-        "id": {
-          "type": "string",
-          "description": "Unique folder identifier."
-        },
-        "ownerId": {
-          "type": "string",
-          "description": "Owner Firebase Auth UID."
-        },
-        "name": {
-          "type": "string",
-          "description": "Folder display name."
-        },
-        "parentId": {
-          "type": "string",
-          "description": "Parent folder ID or empty string for root folders."
-        },
+        "id": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "name": { "type": "string" },
+        "parentId": { "type": "string" },
         "category": {
           "type": "string",
-          "enum": [
-            "general",
-            "discussion",
-            "sports",
-            "geography",
-            "science",
-            "history",
-            "islamic",
-            "technology",
-            "literature",
-            "math"
-          ],
-          "description": "Optional associated category."
+          "enum": ["general", "discussion", "sports", "geography", "science", "history", "islamic", "technology", "literature", "math"]
         },
-        "emoji": {
-          "type": "string",
-          "description": "Optional folder emoji icon."
-        },
-        "createdAt": {
-          "type": "integer",
-          "description": "Epoch milliseconds when created."
-        },
-        "serverUpdatedAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Server timestamp enforced by Firestore security rules."
-        }
+        "emoji": { "type": "string" },
+        "createdAt": { "type": "integer" },
+        "serverUpdatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "ownerId", "name", "parentId", "createdAt", "serverUpdatedAt"]
     },
     "BankQuestion": {
       "title": "BankQuestion",
-      "description": "Categorized quiz question stored in the user's cloud question memory vault to prevent duplicates and track video conversion status.",
+      "description": "Categorized quiz question stored in the user's cloud question memory vault.",
       "type": "object",
       "properties": {
-        "id": {
-          "type": "string",
-          "description": "Unique question document identifier."
-        },
-        "ownerId": {
-          "type": "string",
-          "description": "Owner Firebase Auth UID."
-        },
+        "id": { "type": "string" },
+        "ownerId": { "type": "string" },
         "category": {
           "type": "string",
-          "enum": [
-            "general",
-            "discussion",
-            "sports",
-            "geography",
-            "science",
-            "history",
-            "islamic",
-            "technology",
-            "literature",
-            "math"
-          ],
-          "description": "Question category."
+          "enum": ["general", "discussion", "sports", "geography", "science", "history", "islamic", "technology", "literature", "math"]
         },
-        "slideType": {
-          "type": "string",
-          "enum": ["multiple", "multiple3", "trueFalse", "clues", "versus"],
-          "description": "Quiz slide format."
-        },
-        "badgeText": {
-          "type": "string",
-          "description": "Top badge label."
-        },
-        "question": {
-          "type": "string",
-          "description": "Main quiz question text."
-        },
-        "options": {
-          "type": "array",
-          "description": "Four option/clue slots."
-        },
-        "correctIndex": {
-          "type": "integer",
-          "description": "Zero-based index (0..3) of the correct option."
-        },
-        "explanationText": {
-          "type": "string",
-          "description": "Short explanation or engagement CTA."
-        },
-        "topicTag": {
-          "type": "string",
-          "description": "Subtopic tag from AI consultation."
-        },
-        "folderId": {
-          "type": "string",
-          "description": "Optional folder ID inside the hierarchical folder tree."
-        },
-        "folderPath": {
-          "type": "string",
-          "description": "Optional human-readable folder breadcrumb."
-        },
-        "usedInVideo": {
-          "type": "boolean",
-          "description": "Whether this question was converted into a video slide (green checkmark)."
-        },
-        "usedAt": {
-          "type": "integer",
-          "description": "Epoch milliseconds when marked used."
-        },
-        "createdAt": {
-          "type": "integer",
-          "description": "Epoch milliseconds when created."
-        },
-        "normalizedKey": {
-          "type": "string",
-          "description": "Normalized deduplication key."
-        },
-        "serverUpdatedAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Server timestamp enforced by Firestore security rules."
-        }
+        "slideType": { "type": "string", "enum": ["multiple", "multiple3", "trueFalse", "clues", "versus"] },
+        "badgeText": { "type": "string" },
+        "question": { "type": "string" },
+        "options": { "type": "array" },
+        "correctIndex": { "type": "integer" },
+        "explanationText": { "type": "string" },
+        "topicTag": { "type": "string" },
+        "folderId": { "type": "string" },
+        "folderPath": { "type": "string" },
+        "usedInVideo": { "type": "boolean" },
+        "usedAt": { "type": "integer" },
+        "createdAt": { "type": "integer" },
+        "normalizedKey": { "type": "string" },
+        "serverUpdatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": [
-        "id",
-        "ownerId",
-        "category",
-        "slideType",
-        "badgeText",
-        "question",
-        "options",
-        "correctIndex",
-        "explanationText",
-        "topicTag",
-        "usedInVideo",
-        "createdAt",
-        "normalizedKey",
-        "serverUpdatedAt"
-      ]
+      "required": ["id", "ownerId", "category", "slideType", "badgeText", "question", "options", "correctIndex", "explanationText", "topicTag", "usedInVideo", "createdAt", "normalizedKey", "serverUpdatedAt"]
     },
     "CloudProject": {
       "title": "CloudProject",
       "description": "Synced quiz video project metadata and lightweight JSON snapshot stored per user.",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "description": "Unique project identifier." },
-        "ownerId": { "type": "string", "description": "Owner Firebase Auth UID." },
-        "name": { "type": "string", "description": "Project display name." },
-        "schemaVersion": { "type": "integer", "description": "Project schema version integer." },
-        "preferredAiVoice": {
-          "type": "string",
-          "enum": ["Kore", "Puck", "Charon", "Fenrir", "Zephyr"],
-          "description": "Preferred Gemini TTS voice."
-        },
-        "aspectRatio": {
-          "type": "string",
-          "enum": ["9:16", "16:9"],
-          "description": "Video canvas aspect ratio."
-        },
-        "slideCount": { "type": "integer", "description": "Number of quiz slides in the project." },
-        "projectJson": {
-          "type": "string",
-          "description": "Compact serialized project JSON without oversized inline binary assets."
-        },
-        "updatedAt": { "type": "integer", "description": "Client timestamp of last edit." },
-        "serverUpdatedAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Server timestamp enforced by Firestore security rules."
-        }
+        "id": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "name": { "type": "string" },
+        "schemaVersion": { "type": "integer" },
+        "preferredAiVoice": { "type": "string", "enum": ["Kore", "Puck", "Charon", "Fenrir", "Zephyr"] },
+        "aspectRatio": { "type": "string", "enum": ["9:16", "16:9", "1:1"] },
+        "slideCount": { "type": "integer" },
+        "projectJson": { "type": "string" },
+        "updatedAt": { "type": "integer" },
+        "serverUpdatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": [
-        "id",
-        "ownerId",
-        "name",
-        "schemaVersion",
-        "preferredAiVoice",
-        "aspectRatio",
-        "slideCount",
-        "projectJson",
-        "updatedAt",
-        "serverUpdatedAt"
-      ]
+      "required": ["id", "ownerId", "name", "schemaVersion", "preferredAiVoice", "aspectRatio", "slideCount", "projectJson", "updatedAt", "serverUpdatedAt"]
     },
     "CloudStylePreset": {
       "title": "CloudStylePreset",
       "description": "Saved custom template style preset synced across web and Android APK.",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "description": "Unique preset identifier." },
-        "ownerId": { "type": "string", "description": "Owner Firebase Auth UID." },
-        "name": { "type": "string", "description": "Custom preset name." },
-        "createdAt": { "type": "integer", "description": "Creation epoch ms." },
-        "updatedAt": { "type": "integer", "description": "Last update epoch ms." },
-        "includesMedia": { "type": "boolean", "description": "Whether preset originally included media." },
-        "presetJson": { "type": "string", "description": "Compact serialized style preset JSON." },
-        "serverUpdatedAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Server timestamp enforced by Firestore security rules."
-        }
+        "id": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "name": { "type": "string" },
+        "createdAt": { "type": "integer" },
+        "updatedAt": { "type": "integer" },
+        "includesMedia": { "type": "boolean" },
+        "presetJson": { "type": "string" },
+        "serverUpdatedAt": { "type": "string", "format": "date-time" }
       },
-      "required": [
-        "id",
-        "ownerId",
-        "name",
-        "createdAt",
-        "updatedAt",
-        "includesMedia",
-        "presetJson",
-        "serverUpdatedAt"
-      ]
+      "required": ["id", "ownerId", "name", "createdAt", "updatedAt", "includesMedia", "presetJson", "serverUpdatedAt"]
+    },
+    "BrandPreset": {
+      "title": "BrandPreset",
+      "description": "Unified series brand identity preset (logo, colors, typography, narrator, music, intro, outro, subtitle & lower-third styles).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "name": { "type": "string" },
+        "presetId": { "type": "string" },
+        "logo": { "type": "object" },
+        "primaryColors": { "type": "object" },
+        "secondaryColors": { "type": "object" },
+        "typography": { "type": "object" },
+        "narrator": { "type": "object" },
+        "music": { "type": "object" },
+        "intro": { "type": "object" },
+        "outro": { "type": "object" },
+        "subtitleStyle": { "type": "object" },
+        "lowerThirdStyle": { "type": "object" },
+        "updatedAt": { "type": "integer" },
+        "serverUpdatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "name", "presetId", "primaryColors", "secondaryColors", "typography", "narrator", "music", "intro", "outro", "subtitleStyle", "lowerThirdStyle", "updatedAt", "serverUpdatedAt"]
+    },
+    "Series": {
+      "title": "Series",
+      "description": "AI video series root document with structured metadata and unified brand preset.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "schemaVersion": { "type": "integer" },
+        "name": { "type": "string" },
+        "topic": { "type": "string" },
+        "prompt": { "type": "string" },
+        "language": { "type": "string", "enum": ["ar", "en", "bilingual"] },
+        "audience": { "type": "string", "enum": ["general", "youth", "kids", "professionals", "students"] },
+        "status": { "type": "string", "enum": ["queued", "generating", "reviewing", "ready", "exporting", "failed"] },
+        "episodeCount": { "type": "integer" },
+        "isOpenEnded": { "type": "boolean" },
+        "scenesPerEpisode": { "type": "integer" },
+        "targetDurationSec": { "type": "integer" },
+        "stylePreset": { "type": "string", "enum": ["educational", "documentary", "storytelling", "quizChallenge", "fastFacts", "mythBuster"] },
+        "format": { "type": "string", "enum": ["9:16", "16:9", "1:1"] },
+        "brandPreset": { "type": "object" },
+        "activeJobId": { "type": "string" },
+        "error": { "type": "string" },
+        "createdAt": { "type": "integer" },
+        "updatedAt": { "type": "integer" },
+        "serverUpdatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "schemaVersion", "name", "topic", "prompt", "language", "audience", "status", "episodeCount", "targetDurationSec", "stylePreset", "format", "brandPreset", "createdAt", "updatedAt", "serverUpdatedAt"]
+    },
+    "Episode": {
+      "title": "Episode",
+      "description": "Individual video episode inside a series.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "seriesId": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "index": { "type": "integer" },
+        "title": { "type": "string" },
+        "titleOptions": { "type": "array" },
+        "hook": { "type": "string" },
+        "script": { "type": "string" },
+        "duration": { "type": "number" },
+        "status": { "type": "string", "enum": ["queued", "generating", "reviewing", "ready", "exporting", "failed"] },
+        "thumbnail": { "type": "object" },
+        "thumbnailConcepts": { "type": "array" },
+        "narration": { "type": "object" },
+        "music": { "type": "object" },
+        "captions": { "type": "array" },
+        "publishKit": { "type": "object" },
+        "exportSettings": { "type": "object" },
+        "projectRef": { "type": "string" },
+        "factReviewSummary": { "type": "object" },
+        "error": { "type": "string" },
+        "updatedAt": { "type": "integer" },
+        "serverUpdatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "seriesId", "ownerId", "index", "title", "titleOptions", "hook", "script", "duration", "status", "narration", "music", "publishKit", "exportSettings", "updatedAt", "serverUpdatedAt"]
+    },
+    "Scene": {
+      "title": "Scene",
+      "description": "Single scene inside an episode with narration, on-screen text, visual prompt, mood, and fact-check state.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "episodeId": { "type": "string" },
+        "seriesId": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "index": { "type": "integer" },
+        "narration": { "type": "string" },
+        "onScreenText": { "type": "array" },
+        "visualPrompt": { "type": "string" },
+        "visualAssetUrl": { "type": "string" },
+        "visualType": { "type": "string", "enum": ["svg", "aiImage", "gradient", "quizCard"] },
+        "duration": { "type": "number" },
+        "transition": { "type": "string" },
+        "animation": { "type": "string" },
+        "mood": { "type": "string" },
+        "factCheck": { "type": "object" },
+        "serverUpdatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "episodeId", "seriesId", "ownerId", "index", "narration", "onScreenText", "visualPrompt", "visualType", "duration", "transition", "animation", "mood", "serverUpdatedAt"]
+    },
+    "GenerationJob": {
+      "title": "GenerationJob",
+      "description": "Asynchronous background generation or export job tracker.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "seriesId": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "type": { "type": "string", "enum": ["fullSeries", "episode", "scene", "assets", "export"] },
+        "status": { "type": "string", "enum": ["queued", "generating", "reviewing", "ready", "exporting", "failed"] },
+        "progress": { "type": "integer" },
+        "stageLabel": { "type": "string" },
+        "completedEpisodes": { "type": "integer" },
+        "totalEpisodes": { "type": "integer" },
+        "failedEpisodeIds": { "type": "array" },
+        "error": { "type": "string" },
+        "createdAt": { "type": "integer" },
+        "updatedAt": { "type": "integer" },
+        "serverUpdatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "seriesId", "ownerId", "type", "status", "progress", "stageLabel", "completedEpisodes", "totalEpisodes", "createdAt", "updatedAt", "serverUpdatedAt"]
     }
   },
   "firestore": {
@@ -283,6 +244,26 @@
     "/users/{userId}/presets/{presetId}": {
       "schema": { "$ref": "#/entities/CloudStylePreset" },
       "description": "Per-user synced custom template style presets."
+    },
+    "/users/{userId}/brandPresets/{brandPresetId}": {
+      "schema": { "$ref": "#/entities/BrandPreset" },
+      "description": "Per-user unified video-series brand identity presets."
+    },
+    "/users/{userId}/series/{seriesId}": {
+      "schema": { "$ref": "#/entities/Series" },
+      "description": "Per-user AI-generated video series documents."
+    },
+    "/users/{userId}/series/{seriesId}/episodes/{episodeId}": {
+      "schema": { "$ref": "#/entities/Episode" },
+      "description": "Per-episode scripts, hooks, titles, thumbnails, and publish kits."
+    },
+    "/users/{userId}/series/{seriesId}/episodes/{episodeId}/scenes/{sceneId}": {
+      "schema": { "$ref": "#/entities/Scene" },
+      "description": "Scene-by-scene narration, visuals, transitions, and fact-check metadata."
+    },
+    "/users/{userId}/generationJobs/{jobId}": {
+      "schema": { "$ref": "#/entities/GenerationJob" },
+      "description": "Background generation and export job state records."
     }
   }
 }

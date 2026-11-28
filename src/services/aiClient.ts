@@ -917,7 +917,6 @@ ${diversityDirective}
               model: 'gemini-4-hydrogen',
               contents: promptText,
               config: {
-                temperature: isMath ? 0.85 : 1.05,
                 thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
                 systemInstruction: quizSystemInstruction,
                 responseMimeType: 'application/json',
@@ -1316,7 +1315,6 @@ ${prevTopics ? `المحاور المقترحة مسبقاً: ${prevTopics}` : '
               model: 'gemini-4-hydrogen',
               contents: advisePrompt,
               config: {
-                temperature: 0.9,
                 thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
                 systemInstruction: sysInst,
                 responseMimeType: 'application/json',
@@ -1665,7 +1663,7 @@ export interface YoutubePublishKit {
 
 export async function generateYoutubePublishKit(
   slides: QuestionSlide[],
-  aspectRatio: '9:16' | '16:9',
+  aspectRatio: '9:16' | '16:9' | '1:1',
   hookText?: string
 ): Promise<YoutubePublishKit> {
   const validSlides = slides.filter((s) => (s.question || '').trim().length > 0).slice(0, 15);
@@ -2262,8 +2260,8 @@ export async function generateConnectedQuizSeries(params: {
   if (hasAnyEmbeddedTextAiKeys() && !BUILD_API_BASE) {
     try {
       const { GoogleGenAI, ThinkingLevel, Type } = await import('@google/genai');
-      const epCount = Math.max(2, Math.min(12, Math.round(params.episodeCount || 4)));
-      const qPerEp = Math.max(1, Math.min(6, Math.round(params.questionsPerEpisode || 3)));
+      const epCount = Math.max(2, Math.min(25, Math.round(params.episodeCount || 4)));
+      const qPerEp = Math.max(1, Math.min(15, Math.round(params.questionsPerEpisode || 3)));
       const sys =
         'أنت منتج سلاسل مسابقات عربية احترافية لقنوات يوتيوب شورتس. تلتزم بالدقة التاريخية والشرعية والعلمية ولا تختلق أبداً أي آية أو حديث أو مرجع غير مؤكد.';
       const prompt = `أنشئ سلسلة متكاملة بعنوان/موضوع "${topic}" (${preset.label}) تتكون من ${epCount} حلقات مرقمة، في كل حلقة ${qPerEp} أسئلة مختلفة (4 خيارات)، مستوى الصعوبة: ${params.difficulty || 'متوسط'}.
