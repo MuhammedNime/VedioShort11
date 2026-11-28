@@ -4,6 +4,7 @@ import { getAvoidQuestionsForCategory } from '../storage/questionBankVault';
 import { QUIZ_CATEGORIES, QuestionSlide, QuizCategory, SlideAudioClip } from '../types/quiz';
 import {
   getSlideSpokenAnswer,
+  getSlideSpokenExplanation,
   getSlideSpokenOption,
   getSlideSpokenQuestion,
   prepareArabicSpokenText,
@@ -1555,7 +1556,8 @@ export async function generateSlideVoiceoverSafe(
   slide: QuestionSlide,
   voiceName: AiVoiceName,
   mode: AiVoiceMode,
-  onStep?: (label: string) => void
+  onStep?: (label: string) => void,
+  secondaryVoiceName?: AiVoiceName
 ): Promise<VoiceoverResult> {
   const voiceover = {
     question: slide.voiceover?.question,
@@ -1566,10 +1568,14 @@ export async function generateSlideVoiceoverSafe(
       SlideAudioClip | undefined
     ],
     answer: slide.voiceover?.answer,
+    explanation: slide.voiceover?.explanation,
   };
 
   const consistentStyle =
     'Clear, steady, articulate Modern Standard Arabic quiz presenter; read only the exact provided text cleanly at a natural pace';
+  const secondNarratorStyle =
+    'Clear, warm, authoritative Modern Standard Arabic documentary narrator explaining the answer concisely';
+  const narrator2Voice = secondaryVoiceName || voiceName;
 
   try {
     const spokenQ = getSlideSpokenQuestion(slide);
@@ -1614,12 +1620,23 @@ export async function generateSlideVoiceoverSafe(
       const spokenAns = getSlideSpokenAnswer(slide);
       if (spokenAns) {
         await pause(280);
-        onStep?.('جارٍ توليد صوت الإجابة الصحيحة...');
+        onStep?.(secondaryVoiceName ? 'جارٍ توليد صوت الجواب (المعلق الثاني)...' : 'جارٍ توليد صوت الإجابة الصحيحة...');
         voiceover.answer = await generateTtsClip(
           spokenAns,
-          voiceName,
+          narrator2Voice,
           'ai-answer.wav',
-          consistentStyle
+          secondaryVoiceName ? secondNarratorStyle : consistentStyle
+        );
+      }
+      const spokenExp = getSlideSpokenExplanation(slide);
+      if (spokenExp && secondaryVoiceName) {
+        await pause(280);
+        onStep?.('جارٍ توليد صوت المعلومة (المعلق الثاني)...');
+        voiceover.explanation = await generateTtsClip(
+          spokenExp,
+          narrator2Voice,
+          'ai-explanation.wav',
+          secondNarratorStyle
         );
       }
     }

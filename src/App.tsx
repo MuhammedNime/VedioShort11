@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { User } from 'firebase/auth';
 import {
   Bot,
   Brain,
+  Cloud,
   Film,
   FolderOpen,
   Image as ImageIcon,
@@ -9,6 +11,7 @@ import {
   Lock,
   Music,
   Palette,
+  Plus,
   Redo2,
   SlidersHorizontal,
   Smartphone,
@@ -42,6 +45,15 @@ import { GoogleSignInButton, YouTubePublishPanel } from './components/YouTubePub
 import { YoutubePublishKit } from './services/aiClient';
 import { fetchAiPresenterStatus } from './services/aiPresenterClient';
 import {
+  CloudSyncMeta,
+  getCloudSyncMeta,
+  pushSingleProjectToCloud,
+  signInWithGoogleForSync,
+  signOutFirebaseUser,
+  subscribeFirebaseUser,
+  syncFullWorkspaceWithCloud,
+} from './services/firebaseClient';
+import {
   YouTubeChannelInfo,
   YouTubePlaylistItem,
   YouTubePrivacyStatus,
@@ -51,7 +63,9 @@ import {
   fetchMyYouTubePlaylists,
   initYouTubeAuthListener,
 } from './services/youtubeClient';
+import { getDefaultCustomPreset } from './storage/customPresets';
 import {
+  listProjectsFromStore,
   loadProjectFromStore,
   normalizeLoadedProject,
   saveProjectToStore,
@@ -61,12 +75,15 @@ import {
   seedAllStarterBanksIfNeeded,
 } from './storage/questionBankVault';
 import {
+  DEFAULT_TEMPLATE,
   QuestionSlide,
   QuizProject,
   STUDIO_THEME_ORDER,
   applyChannelThemePreset,
   applyStudioThemePreset,
   applyThemeBackgroundOnly,
+  cloneAudioSettings,
+  createBlankNewProject,
   createDefaultProject,
   getCanvasDimensions,
   getTotalDuration,
@@ -243,6 +260,15 @@ export default function App() {
   const [isConnectingYt, setIsConnectingYt] = useState(false);
   const [ytAuthError, setYtAuthError] = useState('');
 
+  // Firebase Email Cloud Sync State
+  const [cloudUser, setCloudUser] = useState<User | null>(null);
+  const [isCloudSyncing, setIsCloudSyncing] = useState(false);
+  const [cloudSyncMeta, setCloudSyncMeta] = useState<CloudSyncMeta | null>(() =>
+    getCloudSyncMeta()
+  );
+  const [cloudSyncError, setCloudSyncError] = useState<string | null>(null);
+  const lastSyncedUidRef = useRef<string | null>(null);
+
   const toolsMenuRef = useRef<HTMLDivElement | null>(null);
   const hasLocalMutationRef = useRef(false);
   const projectRef = useRef(project);
@@ -250,6 +276,7 @@ export default function App() {
   const pastRef = useRef<QuizProject[]>([]);
   const futureRef = useRef<QuizProject[]>([]);
   const lastHistoryPushTimeRef = useRef(0);
+  const audioSyncSigRef = useRef('');
 
   useEffect(() => {
     let active = true;
@@ -397,8 +424,9 @@ export default function App() {
     (updater: (prev: QuizProject) => QuizProject, immediateHistory = false) => {
       hasLocalMutationRef.current = true;
       setProject((prev) => {
-        const next = updater(prev);
-        if (next === prev) return prev;
+        const nextRaw = updater(prev);
+        if (nextRaw === prev) return prev;
+        const next: QuizProject = { ...nextRaw, updatedAt: Date.now() };
         const now = Date.now();
         if (immediateHistory || now - lastHistoryPushTimeRef.current > 450 || pastRef.current.length === 0) {
           pastRef.current = [...pastRef.current.slice(-39), prev];
@@ -467,6 +495,22 @@ export default function App() {
     void loadProjectFromStore().then((loaded) => {
       if (!hasLocalMutationRef.current) {
         setProject(loaded);
+        if (loaded.publishKit) {
+          kitEditedRef.current = true;
+          setPublishKit({
+            title: loaded.publishKit.title,
+            description: loaded.publishKit.description,
+            hashtags: [...loaded.publishKit.hashtags],
+            tags: [...loaded.publishKit.tags],
+            pinnedComment: loaded.publishKit.pinnedComment,
+          });
+          setTagsInput(loaded.publishKit.tags.join('، '));
+        } else {
+          kitEditedRef.current = false;
+          const fallback = buildDefaultPublishKit(loaded);
+          setPublishKit(fallback);
+          setTagsInput(fallback.tags.join('، '));
+        }
       }
       setIsLoaded(true);
     });
@@ -474,16 +518,31 @@ export default function App() {
 
   useEffect(() => {
     if (!isLoaded) return;
+    const preserveZero = (project.updatedAt || 0) === 0 && !hasLocalMutationRef.current;
     const timer = setTimeout(() => {
-      void saveProjectToStore(project);
-    }, 380);
+      void saveProjectToStore(project, { preserveUpdatedAt: preserveZero }).then(() => {
+        const shouldPushCloud =
+          cloudUser &&
+          (hasLocalMutationRef.current ||
+            project.id !== 'default-shorts-project' ||
+            (project.updatedAt || 0) > 0);
+        if (shouldPushCloud) {
+          const toPush =
+            (project.updatedAt || 0) > 0 ? project : { ...project, updatedAt: Date.now() };
+          void pushSingleProjectToCloud(toPush).catch(() => {});
+        }
+      });
+    }, 550);
     return () => clearTimeout(timer);
-  }, [project, isLoaded]);
+  }, [project, isLoaded, cloudUser]);
 
   useEffect(() => {
     const flushSave = () => {
       if (isLoaded) {
-        void saveProjectToStore(projectRef.current);
+        const current = projectRef.current;
+        void saveProjectToStore(current, {
+          preserveUpdatedAt: (current.updatedAt || 0) === 0 && !hasLocalMutationRef.current,
+        });
       }
     };
     window.addEventListener('pagehide', flushSave);
@@ -513,26 +572,46 @@ export default function App() {
     const fallback = buildDefaultPublishKit(project);
     setPublishKit(fallback);
     setTagsInput(fallback.tags.join('، '));
-  }, [project.slides, project.template.aspectRatio]);
+  }, [project.id, project.slides, project.template.aspectRatio]);
 
   const handleUpdatePublishKit = useCallback(
     (updater: (prev: YoutubePublishKit) => YoutubePublishKit) => {
       kitEditedRef.current = true;
-      setPublishKit(updater);
+      hasLocalMutationRef.current = true;
+      setPublishKit((prev) => {
+        const next = updater(prev);
+        setProject((proj) => ({ ...proj, publishKit: next, updatedAt: Date.now() }));
+        return next;
+      });
     },
     []
   );
 
   const handleUpdateTagsInput = useCallback((val: string) => {
     kitEditedRef.current = true;
+    hasLocalMutationRef.current = true;
     setTagsInput(val);
+    const parsedTags = val
+      .split(/[،,]/)
+      .map((t) => t.trim())
+      .filter(Boolean);
+    setProject((proj) => {
+      const baseKit = proj.publishKit ?? buildDefaultPublishKit(proj);
+      return {
+        ...proj,
+        publishKit: { ...baseKit, tags: parsedTags },
+        updatedAt: Date.now(),
+      };
+    });
   }, []);
 
   const handleResetDefaultKit = useCallback(() => {
     kitEditedRef.current = false;
+    hasLocalMutationRef.current = true;
     const fallback = buildDefaultPublishKit(projectRef.current);
     setPublishKit(fallback);
     setTagsInput(fallback.tags.join('، '));
+    setProject((proj) => ({ ...proj, publishKit: undefined, updatedAt: Date.now() }));
   }, []);
 
   const handleConnectYouTube = useCallback(async () => {
@@ -563,7 +642,188 @@ export default function App() {
     setSelectedPlaylistId('');
   }, []);
 
-  const audioSyncSigRef = useRef('');
+  const switchToProject = useCallback(
+    async (
+      nextProjectRaw: QuizProject,
+      options?: {
+        goToSlidesTab?: boolean;
+        notice?: string | null;
+        markMutated?: boolean;
+        skipFlushCurrent?: boolean;
+      }
+    ) => {
+      const outgoing = projectRef.current;
+      if (!options?.skipFlushCurrent && outgoing.id !== nextProjectRaw.id) {
+        await saveProjectToStore(outgoing, {
+          preserveUpdatedAt: (outgoing.updatedAt || 0) === 0 && !hasLocalMutationRef.current,
+        });
+        if (cloudUser && (outgoing.updatedAt || 0) > 0) {
+          void pushSingleProjectToCloud(outgoing).catch(() => {});
+        }
+      }
+
+      const normalized = normalizeLoadedProject(nextProjectRaw);
+
+      pastRef.current = [];
+      futureRef.current = [];
+      lastHistoryPushTimeRef.current = 0;
+      setCanUndo(false);
+      setCanRedo(false);
+      hasLocalMutationRef.current = Boolean(options?.markMutated);
+      audioSyncSigRef.current = '';
+      setActiveSlideIndex(0);
+      setTabHistory([]);
+      if (options?.goToSlidesTab) {
+        setActiveTab('slides');
+      }
+      setCustomThumbnailBlob(null);
+      setCustomThumbnailPreviewUrl(null);
+      setAiNotice(options?.notice ?? null);
+
+      if (normalized.publishKit) {
+        kitEditedRef.current = true;
+        setPublishKit({
+          title: normalized.publishKit.title,
+          description: normalized.publishKit.description,
+          hashtags: [...normalized.publishKit.hashtags],
+          tags: [...normalized.publishKit.tags],
+          pinnedComment: normalized.publishKit.pinnedComment,
+        });
+        setTagsInput(normalized.publishKit.tags.join('، '));
+      } else {
+        kitEditedRef.current = false;
+        const fallback = buildDefaultPublishKit(normalized);
+        setPublishKit(fallback);
+        setTagsInput(fallback.tags.join('، '));
+      }
+
+      setProject(normalized);
+      await saveProjectToStore(normalized, {
+        preserveUpdatedAt: (normalized.updatedAt || 0) === 0,
+      });
+      if (cloudUser && !options?.skipFlushCurrent && (normalized.updatedAt || 0) > 0) {
+        void pushSingleProjectToCloud(normalized).catch(() => {});
+      }
+    },
+    [cloudUser]
+  );
+
+  const handleCreateBlankProject = useCallback(async () => {
+    triggerHaptic('medium');
+    const existing = await listProjectsFromStore();
+    const fresh = createBlankNewProject(`مشروع جديد ${existing.length + 1}`);
+    const customDef = await getDefaultCustomPreset();
+    if (customDef) {
+      fresh.template = {
+        ...DEFAULT_TEMPLATE,
+        ...customDef.template,
+      };
+      if (customDef.timing) {
+        fresh.timing = { ...customDef.timing };
+      }
+      if (customDef.audio) {
+        fresh.audio = cloneAudioSettings(customDef.audio);
+      }
+    }
+    await switchToProject(fresh, {
+      goToSlidesTab: true,
+      markMutated: true,
+      notice: `تم فتح مساحة عمل جديدة مستقلة (${fresh.name}) وحفظ مشروعك السابق تلقائياً ✓`,
+    });
+  }, [switchToProject]);
+
+  const runCloudWorkspaceSync = useCallback(
+    async (showStatusNotice = false) => {
+      setIsCloudSyncing(true);
+      setCloudSyncError(null);
+      try {
+        const result = await syncFullWorkspaceWithCloud(projectRef.current);
+        const nextMeta = getCloudSyncMeta();
+        setCloudSyncMeta(nextMeta);
+        setVaultRefreshTrigger((n) => n + 1);
+        window.dispatchEvent(new Event('quizpro-cloud-synced'));
+
+        const current = projectRef.current;
+        const currentIsUntouchedDefault =
+          current.id === 'default-shorts-project' &&
+          (current.updatedAt || 0) === 0 &&
+          !hasLocalMutationRef.current;
+
+        if (result.workspace.updatedActiveProject && !hasLocalMutationRef.current) {
+          await switchToProject(result.workspace.updatedActiveProject, {
+            skipFlushCurrent: true,
+            markMutated: false,
+          });
+        } else if (currentIsUntouchedDefault && result.workspace.newestCloudProject) {
+          await switchToProject(result.workspace.newestCloudProject, {
+            skipFlushCurrent: true,
+            markMutated: false,
+          });
+        }
+
+        if (showStatusNotice) {
+          const totalPulled =
+            result.bank.pulled +
+            result.workspace.projectsPulled +
+            result.workspace.presetsPulled;
+          const emailLabel = nextMeta?.lastSyncedEmail || '';
+          setAiNotice(
+            totalPulled > 0
+              ? `تمت مزامنة الإيميل (${emailLabel}) واسترجاع ${result.workspace.projectsPulled} مشاريع و ${result.bank.pulled} أسئلة و ${result.workspace.presetsPulled} ستايل ☁️✓`
+              : `حسابك (${emailLabel}) متصل ومتزامن بالكامل مع السحابة ☁️✓`
+          );
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'تعذر إتمام المزامنة السحابية.';
+        setCloudSyncError(msg);
+      } finally {
+        setIsCloudSyncing(false);
+      }
+    },
+    [switchToProject]
+  );
+
+  const handleCloudSignIn = useCallback(async () => {
+    if (isCloudSyncing) return;
+    triggerHaptic('medium');
+    setIsCloudSyncing(true);
+    setCloudSyncError(null);
+    try {
+      const user = await signInWithGoogleForSync();
+      setCloudUser(user);
+      lastSyncedUidRef.current = user.uid;
+      await runCloudWorkspaceSync(true);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'تعذر تسجيل الدخول بحساب Google.';
+      setCloudSyncError(msg);
+      setIsCloudSyncing(false);
+    }
+  }, [isCloudSyncing, runCloudWorkspaceSync]);
+
+  const handleCloudSignOut = useCallback(async () => {
+    setCloudSyncError(null);
+    lastSyncedUidRef.current = null;
+    await signOutFirebaseUser();
+    setCloudUser(null);
+    setAiNotice('تم تسجيل الخروج من الحساب السحابي. مشاريعك المحلية ما زالت محفوظة على الجهاز.');
+  }, []);
+
+  useEffect(() => {
+    return subscribeFirebaseUser((user) => {
+      setCloudUser(user);
+      if (!user) {
+        lastSyncedUidRef.current = null;
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!isLoaded || !cloudUser) return;
+    if (lastSyncedUidRef.current === cloudUser.uid) return;
+    lastSyncedUidRef.current = cloudUser.uid;
+    void runCloudWorkspaceSync(true);
+  }, [isLoaded, cloudUser, runCloudWorkspaceSync]);
+
   useEffect(() => {
     if (!isLoaded) return;
     const urls: string[] = [];
@@ -916,18 +1176,22 @@ export default function App() {
           } flex-col bg-[var(--panel)] lg:border-l border-t lg:border-t-0 border-[var(--pline)] min-h-0`}
         >
           {/* Unboxed workspace metadata strip + Undo/Redo + Projects + Consolidated Tools Menu */}
-          <div className="flex items-center justify-between gap-1.5 sm:gap-2 px-2.5 py-1.5 sm:px-3.5 sm:py-2 lg:px-5 lg:py-2.5 border-b border-[var(--pline)] text-[11px] lg:text-xs text-[var(--pmuted)] shrink-0">
+          <div className="flex flex-wrap items-center justify-between gap-1.5 px-2.5 py-1.5 sm:px-3.5 sm:py-2 lg:px-4 lg:py-2 border-b border-[var(--pline)] text-[11px] lg:text-xs text-[var(--pmuted)] shrink-0">
             <div className="flex items-center gap-1 sm:gap-1.5 truncate min-w-0">
-              <span className="truncate">{project.slides.length} أسئلة</span>
+              <span className="font-bold text-[var(--ptxt)] truncate max-w-[115px] sm:max-w-[140px]">
+                {project.name}
+              </span>
               <span aria-hidden="true">·</span>
+              <span className="shrink-0">{project.slides.length} أسئلة</span>
+              <span aria-hidden="true" className="hidden sm:inline">·</span>
               <span className="font-mono-nums hidden sm:inline">
                 {canvasDims.width}×{canvasDims.height}
               </span>
-              <span aria-hidden="true" className="hidden sm:inline">·</span>
+              <span aria-hidden="true">·</span>
               <span className="font-mono-nums shrink-0">{totalDuration.toFixed(1)} ث</span>
             </div>
 
-            <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+            <div className="flex items-center flex-wrap gap-1 shrink-0">
               <div className="flex items-center border border-[var(--pline)] rounded-lg bg-[var(--surface)] overflow-hidden">
                 <button
                   type="button"
@@ -995,15 +1259,52 @@ export default function App() {
 
               <button
                 type="button"
+                onClick={() => void handleCreateBlankProject()}
+                title="بدء مشروع جديد مستقل دون التأثير على المشروع الحالي"
+                className="flex items-center gap-1 h-7 px-1.5 sm:px-2 rounded-lg bg-[#00B050] hover:bg-[#00c85b] text-[11px] font-bold text-white cursor-pointer whitespace-nowrap"
+              >
+                <Plus className="w-3.5 h-3.5 shrink-0" />
+                <span>جديد</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => {
                   triggerHaptic('light');
                   setIsProjectsOpen(true);
                 }}
-                title="مكتبة المشاريع المحفوظة"
-                className="flex items-center gap-1 h-7 px-2 rounded-lg bg-[var(--surface)] border border-[var(--pline)] hover:border-[#00B050] text-[11px] font-bold text-[#00B050] dark:text-[#6ee7b7] cursor-pointer whitespace-nowrap"
+                title="مكتبة المشاريع المحفوظة والحفظ السحابي"
+                className="flex items-center gap-1 h-7 px-1.5 sm:px-2 rounded-lg bg-[var(--surface)] border border-[var(--pline)] hover:border-[#00B050] text-[11px] font-bold text-[#00B050] dark:text-[#6ee7b7] cursor-pointer whitespace-nowrap"
               >
                 <FolderOpen className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">المشاريع</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (cloudUser) {
+                    triggerHaptic('light');
+                    setIsProjectsOpen(true);
+                  } else {
+                    void handleCloudSignIn();
+                  }
+                }}
+                title={
+                  cloudUser
+                    ? `متصل بالحفظ السحابي: ${cloudUser.email || ''}`
+                    : 'ربط الإيميل (Firebase) لحفظ كل المشاريع والأسئلة'
+                }
+                className={`flex items-center gap-1 h-7 px-1.5 sm:px-2 rounded-lg border text-[11px] font-bold cursor-pointer whitespace-nowrap transition-colors ${
+                  cloudUser
+                    ? 'bg-[#00B050]/12 border-[#00B050]/45 text-[#00B050] dark:text-[#6ee7b7]'
+                    : 'bg-[var(--surface)] border-[var(--pline)] text-[var(--gold)] hover:border-[var(--gold)]'
+                }`}
+              >
+                <Cloud className={`w-3.5 h-3.5 shrink-0 ${isCloudSyncing ? 'animate-pulse' : ''}`} />
+                <span className="hidden md:inline max-w-[84px] truncate">
+                  {cloudUser ? cloudUser.email?.split('@')[0] || 'سحابي' : 'ربط الإيميل'}
+                </span>
               </button>
 
               <div className="relative" ref={toolsMenuRef}>
@@ -1137,7 +1438,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-3.5 lg:p-5 overscroll-contain">
+          <div key={project.id} className="flex-1 overflow-y-auto p-3.5 lg:p-5 overscroll-contain">
             {aiNotice && (
               <div className="mb-4 flex items-start justify-between gap-2 px-3.5 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/35 text-xs text-amber-300 leading-relaxed">
                 <span>{aiNotice}</span>
@@ -1159,6 +1460,10 @@ export default function App() {
                 aiVoiceName={project.preferredAiVoice ?? 'Kore'}
                 onAiVoiceChange={(voice) =>
                   updateProject((prev) => ({ ...prev, preferredAiVoice: voice }), true)
+                }
+                template={project.template}
+                onUpdateTemplate={(nextTemplate) =>
+                  updateProject((prev) => ({ ...prev, template: nextTemplate }), true)
                 }
                 onSelectSlide={setActiveSlideIndex}
                 onUpdateSlide={handleUpdateSlide}
@@ -1268,6 +1573,37 @@ export default function App() {
                   updateProject((prev) => ({ ...prev, audio: nextAudio }), true)
                 }
                 onOpenAiPresenterStudio={() => setIsAiPresenterOpen(true)}
+                onStartRecurringEpisode={(preset) => {
+                  const freshSlide: QuestionSlide = {
+                    id: `slide-${Date.now()}`,
+                    badgeText: 'السؤال 1',
+                    question: 'اكتب سؤال الحلقة الجديدة هنا',
+                    options: ['الإجابة الصحيحة', 'خيار 2', 'خيار 3', 'خيار 4'],
+                    correctIndex: 0,
+                    explanationText: '',
+                  };
+                  updateProject((prev) => {
+                    const hasBg = Boolean(preset.template.customBgDataUrl);
+                    const hasLogo = Boolean(preset.template.brandLogoDataUrl);
+                    return {
+                      ...prev,
+                      slides: [freshSlide],
+                      template: {
+                        ...DEFAULT_TEMPLATE,
+                        ...preset.template,
+                        customBgDataUrl: hasBg ? preset.template.customBgDataUrl : prev.template.customBgDataUrl,
+                        customBgName: hasBg ? preset.template.customBgName : prev.template.customBgName,
+                        brandLogoDataUrl: hasLogo ? preset.template.brandLogoDataUrl : prev.template.brandLogoDataUrl,
+                        brandLogoName: hasLogo ? preset.template.brandLogoName : prev.template.brandLogoName,
+                      },
+                      timing: preset.timing ? { ...preset.timing } : prev.timing,
+                      audio: preset.audio ? { ...preset.audio } : prev.audio,
+                    };
+                  }, true);
+                  setActiveSlideIndex(0);
+                  setActiveTab('slides');
+                  setAiNotice(`تم فتح حلقة جديدة من القالب «${preset.name}» مع الحفاظ على كامل الهوية والمقدمة والنهاية ✓`);
+                }}
               />
             )}
 
@@ -1305,8 +1641,11 @@ export default function App() {
                   );
                 }}
                 onImportFullProject={(loaded) => {
-                  updateProject(() => normalizeLoadedProject(loaded), true);
-                  setActiveSlideIndex(0);
+                  void switchToProject(loaded, {
+                    goToSlidesTab: true,
+                    markMutated: true,
+                    notice: `تم استيراد وفتح المشروع «${loaded.name}» بنجاح ✓`,
+                  });
                 }}
               />
             )}
@@ -1363,6 +1702,7 @@ export default function App() {
           }`}
         >
           <ShortsPreviewStage
+            key={project.id}
             slides={project.slides}
             activeSlideIndex={activeSlideIndex}
             template={project.template}
@@ -1544,13 +1884,21 @@ export default function App() {
         currentProject={project}
         onClose={() => setIsProjectsOpen(false)}
         onSelectProject={(loaded) => {
-          updateProject(() => normalizeLoadedProject(loaded), true);
-          setActiveSlideIndex(0);
-          setAiNotice(null);
+          void switchToProject(loaded, {
+            goToSlidesTab: true,
+            markMutated: true,
+          });
         }}
         onRenameCurrent={(name) =>
           updateProject((prev) => ({ ...prev, name }), true)
         }
+        cloudUser={cloudUser}
+        isCloudSyncing={isCloudSyncing}
+        cloudSyncMeta={cloudSyncMeta}
+        cloudError={cloudSyncError}
+        onCloudSignIn={() => void handleCloudSignIn()}
+        onCloudSignOut={() => void handleCloudSignOut()}
+        onCloudSyncNow={() => void runCloudWorkspaceSync(true)}
       />
 
       {/* Personal Passcode Lock Management Modal */}

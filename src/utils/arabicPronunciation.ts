@@ -209,3 +209,9 @@ export function getSlideSpokenAnswer(slide: QuestionSlide): string {
   const spokenOpt = getSlideSpokenOption(slide, ansIdx) || prepareArabicSpokenText(correctOpt);
   return `الإجابَةُ الصَّحيحَةُ هِيَ: ${spokenOpt}`;
 }
+
+export function getSlideSpokenExplanation(slide: QuestionSlide): string {
+  const text = (slide.explanationText || '').trim();
+  if (!text) return '';
+  return prepareArabicSpokenText(text);
+}

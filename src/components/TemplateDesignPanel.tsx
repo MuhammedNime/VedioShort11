@@ -38,6 +38,7 @@ import {
 } from 'lucide-react';
 import { BUILTIN_SFX_OPTIONS, soundEngine } from '../audio/soundEngine';
 import { AiVoiceName, generateSingleTtsClip } from '../services/aiClient';
+import { deleteCloudPreset, pushSinglePresetToCloud } from '../services/firebaseClient';
 import {
   CustomTemplatePreset,
   FULL_STUDIO_PACKAGES,
@@ -83,8 +84,10 @@ import {
   ClawatarExpression,
   DEFAULT_PRIZE_LADDER,
   DEFAULT_TEMPLATE,
+  EndCtaStyle,
   ExplanationCardStyle,
   HOOK_TEMPLATES,
+  IntroHookStyle,
   OptionAppearEffect,
   OptionLabelStyle,
   OptionLayoutMode,
@@ -107,6 +110,7 @@ import {
   PrizeLadderStyle,
   QuestionSlide,
   QuestionTextAlign,
+  QuizProgressStyle,
   RevealStyle,
   STUDIO_THEME_ORDER,
   SlideTransitionStyle,
@@ -117,6 +121,8 @@ import {
   TimerUnitSuffix,
   TimerVisibilityMode,
   TimingSettings,
+  WaveformPosition,
+  WaveformStyle,
   applyStudioThemePreset,
   applyThemeBackgroundOnly,
   resetThemeToPresetOriginal,
@@ -149,6 +155,7 @@ interface TemplateDesignPanelProps {
   onTimingChange?: (next: TimingSettings) => void;
   onAudioChange?: (next: AudioSettings) => void;
   onOpenAiPresenterStudio?: () => void;
+  onStartRecurringEpisode?: (preset: CustomTemplatePreset) => void;
 }
 
 const ANIM_OPTIONS: { id: AnimationStyle; label: string }[] = [
@@ -261,6 +268,7 @@ export const TemplateDesignPanel: React.FC<TemplateDesignPanelProps> = ({
   onTimingChange,
   onAudioChange,
   onOpenAiPresenterStudio,
+  onStartRecurringEpisode,
 }) => {
   const [isThemesLibraryOpen, setIsThemesLibraryOpen] = useState(false);
   const stagePreviewSnapshotRef = useRef<TemplateSettings | null>(null);
@@ -285,6 +293,7 @@ export const TemplateDesignPanel: React.FC<TemplateDesignPanelProps> = ({
   const [includeMediaInSave, setIncludeMediaInSave] = useState(true);
   const [includeTimingInSave, setIncludeTimingInSave] = useState(true);
   const [includeAudioInSave, setIncludeAudioInSave] = useState(true);
+  const [saveAsRecurringBlueprint, setSaveAsRecurringBlueprint] = useState(false);
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [editingPresetName, setEditingPresetName] = useState('');
   const [styleError, setStyleError] = useState('');
@@ -367,8 +376,10 @@ export const TemplateDesignPanel: React.FC<TemplateDesignPanelProps> = ({
     };
     reloadPresets();
     window.addEventListener('shorts-studio-presets-updated', reloadPresets);
+    window.addEventListener('quizpro-cloud-synced', reloadPresets);
     return () => {
       window.removeEventListener('shorts-studio-presets-updated', reloadPresets);
+      window.removeEventListener('quizpro-cloud-synced', reloadPresets);
       if (noticeTimerRef.current) {
         window.clearTimeout(noticeTimerRef.current);
       }
@@ -587,12 +598,18 @@ export const TemplateDesignPanel: React.FC<TemplateDesignPanelProps> = ({
       timing: includeTimingInSave ? timing : undefined,
       audio: includeAudioInSave ? audio : undefined,
       isFullStudioPreset: Boolean((includeTimingInSave && timing) || (includeAudioInSave && audio)),
+      isRecurringBlueprint: saveAsRecurringBlueprint,
     });
     setCustomPresets(list);
     setActiveCustomId(created.id);
     setPresetNameInput('');
     triggerHaptic('success');
-    showToast(`تم حفظ "${created.name}" ✓`);
+    void pushSinglePresetToCloud(created).catch(() => {});
+    showToast(
+      saveAsRecurringBlueprint
+        ? `تم حفظ "${created.name}" كقالب حلقة متكررة 🔁 ✓`
+        : `تم حفظ "${created.name}" ✓`
+    );
   };
 
   const handleUpdateSavedPreset = async (presetId: string) => {
@@ -603,10 +620,15 @@ export const TemplateDesignPanel: React.FC<TemplateDesignPanelProps> = ({
       timing: includeTimingInSave ? timing : undefined,
       audio: includeAudioInSave ? audio : undefined,
       isFullStudioPreset: Boolean((includeTimingInSave && timing) || (includeAudioInSave && audio)),
+      isRecurringBlueprint: target?.isRecurringBlueprint || saveAsRecurringBlueprint,
     });
     setCustomPresets(updatedList);
     setActiveCustomId(presetId);
     triggerHaptic('success');
+    const updatedItem = updatedList.find((p) => p.id === presetId);
+    if (updatedItem) {
+      void pushSinglePresetToCloud(updatedItem).catch(() => {});
+    }
     showToast(`تم تحديث "${target?.name || 'الستايل'}" بأحدث تعديلاتك ✓`);
   };
 
@@ -648,6 +670,7 @@ export const TemplateDesignPanel: React.FC<TemplateDesignPanelProps> = ({
     setCustomPresets(next);
     if (activeCustomId === id) setActiveCustomId(null);
     if (defaultStyleId === id) setDefaultStyleId(null);
+    void deleteCloudPreset(id).catch(() => {});
     showToast('تم حذف الستايل');
   };
 
@@ -656,6 +679,10 @@ export const TemplateDesignPanel: React.FC<TemplateDesignPanelProps> = ({
     setCustomPresets(next);
     setEditingPresetId(null);
     setEditingPresetName('');
+    const renamed = next.find((p) => p.id === id);
+    if (renamed) {
+      void pushSinglePresetToCloud(renamed).catch(() => {});
+    }
     showToast('تم تعديل اسم الستايل ✓');
   };
 
@@ -1276,6 +1303,15 @@ export const TemplateDesignPanel: React.FC<TemplateDesignPanelProps> = ({
                   <span>حفظ المؤثرات الصوتية (باقة استوديو كاملة)</span>
                 </label>
               )}
+              <label className="flex items-center gap-1.5 cursor-pointer text-[var(--gold)] font-bold">
+                <input
+                  type="checkbox"
+                  checked={saveAsRecurringBlueprint}
+                  onChange={(e) => setSaveAsRecurringBlueprint(e.target.checked)}
+                  className="w-3.5 h-3.5 accent-[#00B050] rounded"
+                />
+                <span>حفظ كقالب حلقة متكررة 🔁</span>
+              </label>
             </div>
           </div>
 
@@ -1412,6 +1448,11 @@ export const TemplateDesignPanel: React.FC<TemplateDesignPanelProps> = ({
                               <span className="text-xs font-bold text-[var(--ptxt)] truncate">
                                 {cp.name}
                               </span>
+                              {cp.isRecurringBlueprint && (
+                                <span className="text-[9px] px-1 py-0.5 rounded bg-[#00B050]/18 text-[#00B050] dark:text-[#6ee7b7] font-bold shrink-0">
+                                  حلقة متكررة 🔁
+                                </span>
+                              )}
                               {isDefault && (
                                 <span className="text-[9px] px-1 py-0.5 rounded bg-[var(--gold)]/20 text-[var(--gold)] font-bold shrink-0">
                                   افتراضي
@@ -1421,12 +1462,31 @@ export const TemplateDesignPanel: React.FC<TemplateDesignPanelProps> = ({
                             <span className="text-[10px] text-[var(--pmuted)] truncate">
                               {cp.template.aspectRatio || '9:16'}
                               {cp.template.boxStyle ? ` · ${cp.template.boxStyle}` : ''}
-                              {cp.isFullStudioPreset ? ' · باقة كاملة' : cp.timing ? ' · مع التوقيت' : ''}
+                              {cp.isRecurringBlueprint
+                                ? ' · قالب سلسلة متكامل'
+                                : cp.isFullStudioPreset
+                                  ? ' · باقة كاملة'
+                                  : cp.timing
+                                    ? ' · مع التوقيت'
+                                    : ''}
                             </span>
                           </div>
                         </button>
 
                         <div className="flex items-center gap-0.5 shrink-0">
+                          {onStartRecurringEpisode && (cp.isRecurringBlueprint || cp.isFullStudioPreset) && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                triggerHaptic('medium');
+                                onStartRecurringEpisode(cp);
+                              }}
+                              title="بدء حلقة جديدة بهذا القالب (يحفظ الهوية والمقدمة والنهاية ويمهد أسئلة جديدة)"
+                              className="px-2 py-1 rounded-md bg-[#00B050]/15 hover:bg-[#00B050] border border-[#00B050]/40 text-[#00B050] hover:text-white dark:text-[#6ee7b7] text-[9.5px] font-extrabold transition-colors cursor-pointer"
+                            >
+                              حلقة جديدة 🔁
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => handleToggleDefaultStyle(cp.id)}
@@ -3619,6 +3679,30 @@ export const TemplateDesignPanel: React.FC<TemplateDesignPanelProps> = ({
           </label>
           {template.showIntroHook && (
             <div className="flex flex-col gap-2.5 pt-1 border-t border-[var(--pline)]">
+              <div className="grid grid-cols-2 gap-1.5">
+                {(
+                  [
+                    { id: 'card', label: 'بطاقة هوك نصية 🎯' },
+                    { id: 'channelBumper', label: 'شاشة افتتاحية للقناة 🎬' },
+                  ] as { id: IntroHookStyle; label: string }[]
+                ).map((mode) => (
+                  <button
+                    key={mode.id}
+                    type="button"
+                    onClick={() => {
+                      triggerHaptic('selection');
+                      patch({ introHookStyle: mode.id });
+                    }}
+                    className={`py-1.5 px-2 rounded-lg border text-[11px] font-bold transition-colors cursor-pointer ${
+                      (template.introHookStyle || 'card') === mode.id
+                        ? 'bg-[#00B050]/18 border-[#00B050] text-[#00B050] dark:text-[#6ee7b7]'
+                        : 'bg-[var(--panel)] border-[var(--pline)] text-[var(--pmuted)] hover:text-[var(--ptxt)]'
+                    }`}
+                  >
+                    {mode.label}
+                  </button>
+                ))}
+              </div>
               <input
                 type="text"
                 value={template.introHookText ?? 'اختبر معلوماتك الآن!'}
@@ -3626,6 +3710,15 @@ export const TemplateDesignPanel: React.FC<TemplateDesignPanelProps> = ({
                 placeholder="اختبر معلوماتك الآن!"
                 className="w-full px-3 py-1.5 rounded-lg bg-[var(--panel)] border border-[var(--pline)] text-xs text-[var(--ptxt)] focus:border-[#00B050] focus:outline-none"
               />
+              {template.introHookStyle === 'channelBumper' && (
+                <input
+                  type="text"
+                  value={template.introBumperSubtitle ?? 'هل يمكنك حل جميع الأسئلة؟'}
+                  onChange={(e) => patch({ introBumperSubtitle: e.target.value })}
+                  placeholder="وصف الشاشة الافتتاحية (مثل: تحدي الذكاء اليومي)"
+                  className="w-full px-3 py-1.5 rounded-lg bg-[var(--panel)] border border-[var(--pline)] text-[11px] text-[var(--ptxt)] focus:border-[#00B050] focus:outline-none"
+                />
+              )}
               <div className="flex flex-wrap gap-1.5">
                 {HOOK_TEMPLATES.map((tpl) => {
                   const isActive = template.introHookTemplateId === tpl.id;
@@ -3864,13 +3957,45 @@ export const TemplateDesignPanel: React.FC<TemplateDesignPanelProps> = ({
                 </span>
               </label>
               {template.showEndSubscribeCta && (
-                <div className="flex flex-col gap-1.5 pt-1 border-t border-[var(--pline)]/70">
+                <div className="flex flex-col gap-2 pt-1.5 border-t border-[var(--pline)]/70">
+                  <div className="grid grid-cols-3 gap-1">
+                    {(
+                      [
+                        { id: 'likeAndSubscribe', label: '👍 لايك + 🔔 اشتراك' },
+                        { id: 'youtubeBar', label: 'شريط يوتيوب' },
+                        { id: 'commentChallenge', label: 'تحدي التعليقات' },
+                      ] as { id: EndCtaStyle; label: string }[]
+                    ).map((ctaOpt) => (
+                      <button
+                        key={ctaOpt.id}
+                        type="button"
+                        onClick={() => {
+                          triggerHaptic('selection');
+                          patch({ endCtaStyle: ctaOpt.id });
+                        }}
+                        className={`py-1.5 px-1.5 rounded-lg border text-[10px] font-bold transition-colors cursor-pointer ${
+                          (template.endCtaStyle || 'likeAndSubscribe') === ctaOpt.id
+                            ? 'bg-[#00B050]/18 border-[#00B050] text-[#00B050] dark:text-[#6ee7b7]'
+                            : 'bg-[var(--panel)] border-[var(--pline)] text-[var(--pmuted)] hover:text-[var(--ptxt)]'
+                        }`}
+                      >
+                        {ctaOpt.label}
+                      </button>
+                    ))}
+                  </div>
                   <input
                     type="text"
                     value={template.endCtaText ?? ''}
                     onChange={(e) => patch({ endCtaText: e.target.value })}
                     placeholder="اشترك في القناة · اكتب نتيجتك في التعليقات"
                     className="w-full px-3 py-1.5 rounded-lg bg-[var(--panel)] border border-[var(--pline)] text-xs text-[var(--ptxt)] placeholder:text-[var(--pmuted)] focus:border-[#00B050] focus:outline-none"
+                  />
+                  <input
+                    type="text"
+                    value={template.endCommentPollText ?? ''}
+                    onChange={(e) => patch({ endCommentPollText: e.target.value })}
+                    placeholder="سؤال تفاعلي للتعليقات (اختياري، مثل: أي سؤال كان الأصعب؟ 👇)"
+                    className="w-full px-3 py-1.5 rounded-lg bg-[var(--panel)] border border-[var(--pline)] text-[11px] text-[var(--gold)] placeholder:text-[var(--pmuted)] focus:border-[#00B050] focus:outline-none"
                   />
                   <div className="flex flex-wrap gap-1">
                     {[
@@ -4385,6 +4510,34 @@ export const TemplateDesignPanel: React.FC<TemplateDesignPanelProps> = ({
           </span>
         </label>
 
+        {template.showProgressCounter && (
+          <div className="grid grid-cols-3 gap-1.5 p-2 rounded-xl bg-[var(--surface)] border border-[var(--pline)]">
+            {(
+              [
+                { id: 'dots', label: 'نقاط • • ● ○' },
+                { id: 'segments', label: 'أجزاء متصلة' },
+                { id: 'bar', label: 'شريط خطي' },
+              ] as { id: QuizProgressStyle; label: string }[]
+            ).map((ps) => (
+              <button
+                key={ps.id}
+                type="button"
+                onClick={() => {
+                  triggerHaptic('selection');
+                  patch({ quizProgressStyle: ps.id });
+                }}
+                className={`py-1.5 px-2 rounded-lg border text-[10.5px] font-bold transition-colors cursor-pointer ${
+                  (template.quizProgressStyle || 'dots') === ps.id
+                    ? 'bg-[#00B050]/18 border-[#00B050] text-[#00B050] dark:text-[#6ee7b7]'
+                    : 'bg-[var(--panel)] border-[var(--pline)] text-[var(--pmuted)] hover:text-[var(--ptxt)]'
+                }`}
+              >
+                {ps.label}
+              </button>
+            ))}
+          </div>
+        )}
+
         <label className="flex items-center gap-2 cursor-pointer">
           <input
             type="checkbox"
@@ -4396,6 +4549,85 @@ export const TemplateDesignPanel: React.FC<TemplateDesignPanelProps> = ({
             إظهار شريط تقدم سينمائي مستمر أعلى الفيديو كاملاً 🎬
           </span>
         </label>
+
+        {/* Audio Waveform Visualizer */}
+        <div className="flex flex-col gap-2 p-2.5 rounded-xl bg-[var(--surface)] border border-[var(--pline)]">
+          <label className="flex items-center justify-between gap-2 cursor-pointer">
+            <span className="text-xs font-bold text-[var(--ptxt)]">
+              موجة صوتية متفاعلة مع النطق (Waveform) 🌊
+            </span>
+            <input
+              type="checkbox"
+              checked={Boolean(template.showAudioWaveform)}
+              onChange={(e) => {
+                triggerHaptic('selection');
+                patch({ showAudioWaveform: e.target.checked });
+              }}
+              className="w-4 h-4 accent-[#00B050] rounded cursor-pointer shrink-0"
+            />
+          </label>
+          {template.showAudioWaveform && (
+            <div className="flex flex-col gap-2 pt-1 border-t border-[var(--pline)]/60">
+              <div className="grid grid-cols-3 gap-1">
+                {(
+                  [
+                    { id: 'bars', label: 'أعمدة إيقاع' },
+                    { id: 'mirrorWave', label: 'موجة مرآة' },
+                    { id: 'pulseLine', label: 'نبض خطي' },
+                  ] as { id: WaveformStyle; label: string }[]
+                ).map((ws) => (
+                  <button
+                    key={ws.id}
+                    type="button"
+                    onClick={() => {
+                      triggerHaptic('selection');
+                      patch({ waveformStyle: ws.id });
+                    }}
+                    className={`py-1.5 px-2 rounded-lg border text-[10px] font-bold cursor-pointer ${
+                      (template.waveformStyle || 'bars') === ws.id
+                        ? 'bg-[#00B050]/18 border-[#00B050] text-[#00B050] dark:text-[#6ee7b7]'
+                        : 'bg-[var(--panel)] border-[var(--pline)] text-[var(--pmuted)] hover:text-[var(--ptxt)]'
+                    }`}
+                  >
+                    {ws.label}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <div className="grid grid-cols-2 gap-1 flex-1">
+                  {(
+                    [
+                      { id: 'bottom', label: 'أسفل الشاشة' },
+                      { id: 'underQuestion', label: 'أسفل السؤال' },
+                    ] as { id: WaveformPosition; label: string }[]
+                  ).map((wp) => (
+                    <button
+                      key={wp.id}
+                      type="button"
+                      onClick={() => patch({ waveformPosition: wp.id })}
+                      className={`py-1 px-2 rounded-md border text-[10px] font-bold cursor-pointer ${
+                        (template.waveformPosition || 'bottom') === wp.id
+                          ? 'bg-[#00B050]/18 border-[#00B050] text-[#00B050] dark:text-[#6ee7b7]'
+                          : 'bg-[var(--panel)] border-[var(--pline)] text-[var(--pmuted)]'
+                      }`}
+                    >
+                      {wp.label}
+                    </button>
+                  ))}
+                </div>
+                <label className="flex items-center gap-1.5 text-[10px] text-[var(--pmuted)] shrink-0 cursor-pointer">
+                  <span>اللون:</span>
+                  <input
+                    type="color"
+                    value={template.waveformColor || template.brandAccentColor || '#00B050'}
+                    onChange={(e) => patch({ waveformColor: e.target.value })}
+                    className="w-7 h-7 rounded cursor-pointer border border-[var(--pline)] bg-transparent"
+                  />
+                </label>
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Live Scoreboard HUD */}
         <div className="flex flex-col gap-2 p-2.5 rounded-xl bg-[var(--surface)] border border-[var(--pline)]">

@@ -50,9 +50,11 @@ import {
   SlideDifficulty,
   SlideOptionImage,
   SlideType,
+  TemplateSettings,
 } from '../types/quiz';
 import {
   getSlideSpokenAnswer,
+  getSlideSpokenExplanation,
   getSlideSpokenOption,
   getSlideSpokenQuestion,
 } from '../utils/arabicPronunciation';
@@ -65,6 +67,8 @@ interface SlidesEditorPanelProps {
   activeIndex: number;
   aiVoiceName: AiVoiceName;
   onAiVoiceChange: (voice: AiVoiceName) => void;
+  template?: TemplateSettings;
+  onUpdateTemplate?: (next: TemplateSettings) => void;
   onSelectSlide: (idx: number) => void;
   onUpdateSlide: (idx: number, updated: QuestionSlide) => void;
   onAddSlide: () => void;
@@ -83,6 +87,8 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
   activeIndex,
   aiVoiceName,
   onAiVoiceChange,
+  template,
+  onUpdateTemplate,
   onSelectSlide,
   onUpdateSlide,
   onAddSlide,
@@ -113,6 +119,10 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
 
   const activeSlideType: SlideType = activeSlide.slideType || 'multiple';
 
+  const dualVoiceEnabled = Boolean(template?.dualVoiceEnabled);
+  const secondaryAiVoice: AiVoiceName =
+    template?.secondaryAiVoice || (aiVoiceName === 'Charon' ? 'Kore' : 'Charon');
+
   const handleGenerateSlideAiVoice = async () => {
     if (!activeSlide.question.trim()) return;
     try {
@@ -129,7 +139,8 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
         activeSlide,
         aiVoiceName,
         voiceMode,
-        (step) => setVoiceStepText(step)
+        (step) => setVoiceStepText(step),
+        dualVoiceEnabled ? secondaryAiVoice : undefined
       );
       onUpdateSlide(activeIndex, res.slide);
       if (res.warning) {
@@ -147,7 +158,7 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
   const setClipOnSlide = (
     slideIdx: number,
     baseSlide: QuestionSlide,
-    target: 'question' | 'answer' | 0 | 1 | 2 | 3,
+    target: 'question' | 'answer' | 'explanation' | 0 | 1 | 2 | 3,
     clip: SlideAudioClip | undefined
   ): QuestionSlide => {
     const currentVoiceover = baseSlide.voiceover ?? {};
@@ -162,6 +173,11 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
       nextSlide = {
         ...baseSlide,
         voiceover: { ...currentVoiceover, answer: clip },
+      };
+    } else if (target === 'explanation') {
+      nextSlide = {
+        ...baseSlide,
+        voiceover: { ...currentVoiceover, explanation: clip },
       };
     } else {
       const nextOpts = [
@@ -183,7 +199,9 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
     return nextSlide;
   };
 
-  const handleGenerateSingleFieldVoice = async (target: 'question' | 'answer' | 0 | 1 | 2 | 3) => {
+  const handleGenerateSingleFieldVoice = async (
+    target: 'question' | 'answer' | 'explanation' | 0 | 1 | 2 | 3
+  ) => {
     try {
       soundEngine.getContext();
     } catch {
@@ -191,6 +209,7 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
     }
     let textToSpeak = '';
     let fileName = 'ai-clip.wav';
+    let voiceToUse: AiVoiceName = aiVoiceName;
 
     if (target === 'question') {
       textToSpeak = getSlideSpokenQuestion(activeSlide);
@@ -198,6 +217,11 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
     } else if (target === 'answer') {
       textToSpeak = getSlideSpokenAnswer(activeSlide);
       fileName = 'ai-answer.wav';
+      if (dualVoiceEnabled) voiceToUse = secondaryAiVoice;
+    } else if (target === 'explanation') {
+      textToSpeak = getSlideSpokenExplanation(activeSlide);
+      fileName = 'ai-explanation.wav';
+      voiceToUse = dualVoiceEnabled ? secondaryAiVoice : aiVoiceName;
     } else {
       textToSpeak = getSlideSpokenOption(activeSlide, target);
       fileName = `ai-option-${target + 1}.wav`;
@@ -212,7 +236,7 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
     setIsVoicing(true);
     setVoicingTarget(String(target));
     try {
-      const clip = await generateSingleTtsClip(textToSpeak, aiVoiceName, fileName);
+      const clip = await generateSingleTtsClip(textToSpeak, voiceToUse, fileName);
       setClipOnSlide(activeIndex, activeSlide, target, clip);
     } catch (err) {
       setVoiceError(err instanceof Error ? err.message : 'تعذر توليد الصوت');
@@ -249,6 +273,7 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
               SlideAudioClip | undefined
             ],
             answer: slides[sIdx].voiceover?.answer,
+            explanation: slides[sIdx].voiceover?.explanation,
           },
         };
 
@@ -299,10 +324,25 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
             setVoiceStepText(`سؤال ${sIdx + 1}/${slides.length}: الحل...`);
             const clip = await generateSingleTtsClip(
               spokenAns,
-              aiVoiceName,
+              dualVoiceEnabled ? secondaryAiVoice : aiVoiceName,
               `ai-s${sIdx + 1}-ans.wav`
             );
             workingSlide = setClipOnSlide(sIdx, workingSlide, 'answer', clip);
+            generatedCount += 1;
+            await new Promise((r) => setTimeout(r, 240));
+          }
+        }
+
+        if (dualVoiceEnabled && !workingSlide.voiceover?.explanation) {
+          const spokenExp = getSlideSpokenExplanation(workingSlide);
+          if (spokenExp) {
+            setVoiceStepText(`سؤال ${sIdx + 1}/${slides.length}: صوت المعلومة...`);
+            const clip = await generateSingleTtsClip(
+              spokenExp,
+              secondaryAiVoice,
+              `ai-s${sIdx + 1}-exp.wav`
+            );
+            workingSlide = setClipOnSlide(sIdx, workingSlide, 'explanation', clip);
             generatedCount += 1;
             await new Promise((r) => setTimeout(r, 240));
           }
@@ -920,6 +960,52 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
                   </button>
                 </div>
               </div>
+
+              {template && onUpdateTemplate && (
+                <div className="flex flex-col gap-1.5 pt-1.5 border-t border-[var(--pline)]/60">
+                  <label className="flex items-center justify-between gap-2 cursor-pointer">
+                    <span className="text-[11px] font-bold text-[var(--ptxt)]">
+                      تحدي الصوتين: مذيع للسؤال + معلق ثانٍ للحل والمعلومة 🎙️
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={dualVoiceEnabled}
+                      onChange={(e) => {
+                        triggerHaptic('selection');
+                        onUpdateTemplate({
+                          ...template,
+                          dualVoiceEnabled: e.target.checked,
+                        });
+                      }}
+                      className="w-3.5 h-3.5 accent-[#00B050] rounded cursor-pointer"
+                    />
+                  </label>
+                  {dualVoiceEnabled && (
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10.5px] text-[var(--pmuted)] whitespace-nowrap">
+                        صوت المعلق الثاني (الحل والدليل):
+                      </span>
+                      <select
+                        value={secondaryAiVoice}
+                        disabled={isVoicing}
+                        onChange={(e) =>
+                          onUpdateTemplate({
+                            ...template,
+                            secondaryAiVoice: e.target.value as AiVoiceName,
+                          })
+                        }
+                        className="px-2.5 py-1 rounded-md bg-[var(--panel)] border border-[var(--pline)] text-[11px] text-[#6ee7b7] font-bold focus:border-[#00B050] focus:outline-none"
+                      >
+                        {AI_VOICE_OPTIONS.map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -2125,6 +2211,61 @@ export const SlidesEditorPanel: React.FC<SlidesEditorPanelProps> = ({
               )}
               <span>توليد دليل موثق ✨</span>
             </button>
+
+            <button
+              type="button"
+              disabled={isVoicing || !(activeSlide.explanationText || '').trim()}
+              onClick={() => {
+                triggerHaptic('selection');
+                void handleGenerateSingleFieldVoice('explanation');
+              }}
+              title={
+                dualVoiceEnabled
+                  ? `توليد تعليق صوتي للمعلومة بصوت المعلق الثاني (${secondaryAiVoice})`
+                  : 'توليد تعليق صوتي للمعلومة'
+              }
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[var(--surface)] hover:border-[#00B050] border border-[var(--pline)] text-[11px] font-bold text-[var(--ptxt)] disabled:opacity-45 cursor-pointer shrink-0"
+            >
+              {voicingTarget === 'explanation' ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-[#00B050]" />
+              ) : (
+                <Volume2 className="w-3.5 h-3.5 text-[#00B050]" />
+              )}
+              <span>
+                {activeSlide.voiceover?.explanation
+                  ? 'تحديث صوت المعلومة'
+                  : dualVoiceEnabled
+                    ? 'صوت المعلق 2 للمعلومة'
+                    : 'توليد صوت المعلومة'}
+              </span>
+            </button>
+
+            {activeSlide.voiceover?.explanation && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (activeSlide.voiceover?.explanation) {
+                      void soundEngine.playClip(activeSlide.voiceover.explanation, 1);
+                    }
+                  }}
+                  title="سماع صوت المعلومة"
+                  className="p-1.5 rounded-lg bg-[var(--surface)] hover:border-[#00B050] border border-[var(--pline)] text-[#00B050] cursor-pointer"
+                >
+                  <Play className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setClipOnSlide(activeIndex, activeSlide, 'explanation', undefined)
+                  }
+                  title="حذف صوت المعلومة"
+                  className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-400 cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </>
+            )}
           </div>
           {evidenceNotice && (
             <div className="text-[11px] text-amber-300 bg-amber-950/30 border border-amber-500/30 rounded-lg px-2.5 py-1.5">

@@ -7,6 +7,7 @@ import {
   Copy,
   Download,
   ExternalLink,
+  FileText,
   Film,
   Image as ImageIcon,
   Layers,
@@ -51,6 +52,7 @@ import {
   shareBlobNatively,
 } from '../utils/nativeDownload';
 import { triggerHaptic } from '../utils/haptics';
+import { generateProjectSrt } from '../utils/subtitleExport';
 import { GoogleSignInButton } from './YouTubePublishPanel';
 
 export interface SharedYouTubeProps {
@@ -87,7 +89,7 @@ interface ExportVideoModalProps extends SharedYouTubeProps {
   onOpenThumbnailStudio?: () => void;
 }
 
-type ExportScopeMode = 'full' | 'single' | 'splitBatch';
+type ExportScopeMode = 'full' | 'single' | 'splitBatch' | 'dualRatio';
 
 const EXPORT_PREFS_STORAGE_KEY = 'quizpro_export_prefs_v1';
 
@@ -161,6 +163,9 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
   const [result, setResult] = useState<ExportResult | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [exportedFileName, setExportedFileName] = useState<string>('');
+  const [secondResult, setSecondResult] = useState<ExportResult | null>(null);
+  const [secondVideoUrl, setSecondVideoUrl] = useState<string | null>(null);
+  const [secondFileName, setSecondFileName] = useState<string>('');
   const [batchDoneCount, setBatchDoneCount] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
   const [isCapturingThumb, setIsCapturingThumb] = useState(false);
@@ -230,7 +235,13 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
       if (prev) URL.revokeObjectURL(prev);
       return null;
     });
+    setSecondVideoUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
     setResult(null);
+    setSecondResult(null);
+    setSecondFileName('');
     setYtResult(null);
     setConfirmUploadOpen(false);
     setBatchDoneCount(0);
@@ -315,7 +326,13 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
       if (prev) URL.revokeObjectURL(prev);
       return null;
     });
+    setSecondVideoUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
     setResult(null);
+    setSecondResult(null);
+    setSecondFileName('');
     setYtResult(null);
     setConfirmUploadOpen(false);
     setBatchDoneCount(0);
@@ -379,6 +396,117 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
     }
   };
 
+  const startDualAspectExport = async (
+    overrideFormat?: ExportFormatPreference,
+    overrideRes?: ExportResolutionPreference
+  ) => {
+    triggerHaptic('medium');
+    try {
+      soundEngine.getContext();
+    } catch {
+      // ignore
+    }
+    const activeProject = projectRef.current;
+    if (activeProject.slides.length === 0) return;
+
+    if (abortRef.current) {
+      abortRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    setVideoUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+    setSecondVideoUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+    setResult(null);
+    setSecondResult(null);
+    setSecondFileName('');
+    setYtResult(null);
+    setConfirmUploadOpen(false);
+    setBatchDoneCount(0);
+    setStatus('rendering');
+    setSaveNotice('');
+    setErrorMsg('');
+
+    try {
+      const ts = Date.now();
+      // 1) Render 9:16 Vertical Shorts version
+      const res9x16 = await exportQuizVideo(
+        activeProject.slides,
+        { ...activeProject.template, aspectRatio: '9:16' },
+        activeProject.timing,
+        activeProject.audio,
+        (p) => {
+          setProgress({
+            progress: p.progress * 0.5,
+            currentTime: p.currentTime,
+            totalDuration: p.totalDuration,
+            statusText: `النسخة العمودية 9:16: ${p.statusText || 'جارٍ التصدير...'}`,
+          });
+        },
+        controller.signal,
+        {
+          formatPreference: overrideFormat ?? formatPref,
+          resolutionPreference: overrideRes ?? resPref,
+          getPreviewCanvas: () => livePreviewCanvasRef.current,
+        }
+      );
+      if (controller.signal.aborted) return;
+      const name9x16 = `quiz-shorts-9x16-${ts}.${res9x16.extension || 'webm'}`;
+      if (isAndroidNativeApp()) {
+        await saveOrDownloadBlob(res9x16.blob, name9x16, res9x16.mimeType);
+      }
+
+      // 2) Render 16:9 Horizontal YouTube version
+      const res16x9 = await exportQuizVideo(
+        activeProject.slides,
+        { ...activeProject.template, aspectRatio: '16:9' },
+        activeProject.timing,
+        activeProject.audio,
+        (p) => {
+          setProgress({
+            progress: 0.5 + p.progress * 0.5,
+            currentTime: p.currentTime,
+            totalDuration: p.totalDuration,
+            statusText: `النسخة الأفقية 16:9: ${p.statusText || 'جارٍ التصدير...'}`,
+          });
+        },
+        controller.signal,
+        {
+          formatPreference: overrideFormat ?? formatPref,
+          resolutionPreference: overrideRes ?? resPref,
+          getPreviewCanvas: () => livePreviewCanvasRef.current,
+        }
+      );
+      if (controller.signal.aborted) return;
+      const name16x9 = `quiz-wide-16x9-${ts}.${res16x9.extension || 'webm'}`;
+      if (isAndroidNativeApp()) {
+        await saveOrDownloadBlob(res16x9.blob, name16x9, res16x9.mimeType);
+      }
+
+      setResult(res9x16);
+      setVideoUrl(URL.createObjectURL(res9x16.blob));
+      setExportedFileName(name9x16);
+      setSecondResult(res16x9);
+      setSecondVideoUrl(URL.createObjectURL(res16x9.blob));
+      setSecondFileName(name16x9);
+      setBatchDoneCount(2);
+      setStatus('done');
+      triggerHaptic('success');
+      setSaveNotice('تم تجهيز النسختين (9:16 للشورتس + 16:9 لليوتيوب الأفقي) بنجاح! يمكنك تنزيل كل منهما بالأسفل.');
+    } catch (err: unknown) {
+      if (controller.signal.aborted) return;
+      triggerHaptic('error');
+      setErrorMsg(err instanceof Error ? err.message : 'فشل التصدير المزدوج');
+      setStatus('error');
+    }
+  };
+
   useEffect(() => {
     if (!isOpen) {
       if (abortRef.current) {
@@ -388,11 +516,17 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
         if (prev) URL.revokeObjectURL(prev);
         return null;
       });
+      setSecondVideoUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
       setScopeMode('full');
       setSelectedSlideIdx(0);
       setStatus('idle');
       setResult(null);
       setExportedFileName('');
+      setSecondResult(null);
+      setSecondFileName('');
       setBatchDoneCount(0);
       setIsSaving(false);
       setSaveNotice('');
@@ -439,6 +573,47 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
     } else if (res.error) {
       triggerHaptic('error');
       setSaveNotice(`تعذر حفظ الفيديو: ${res.error}`);
+    }
+  };
+
+  const handleDownloadSecond = async () => {
+    if (!secondResult || isSaving) return;
+    triggerHaptic('medium');
+    setIsSaving(true);
+    setSaveNotice('');
+    const sName = secondFileName || `quiz-wide-16x9-${Date.now()}.${secondResult.extension || 'webm'}`;
+    const res = await saveOrDownloadBlob(secondResult.blob, sName, secondResult.mimeType);
+    setIsSaving(false);
+    if (res.ok) {
+      triggerHaptic('success');
+      setSaveNotice('تم بدء تنزيل النسخة الأفقية (16:9) بنجاح.');
+    } else if (res.error) {
+      triggerHaptic('error');
+      setSaveNotice(`تعذر حفظ النسخة الأفقية: ${res.error}`);
+    }
+  };
+
+  const handleDownloadSrt = async () => {
+    triggerHaptic('selection');
+    const targetSlides = getActiveTargetSlides();
+    const srtContent = generateProjectSrt(
+      targetSlides,
+      project.timing,
+      project.audio,
+      project.template
+    );
+    if (!srtContent.trim()) {
+      setSaveNotice('لا توجد نصوص كافية لتوليد ملف الترجمة.');
+      return;
+    }
+    const srtBlob = new Blob(['\uFEFF' + srtContent], { type: 'text/plain;charset=utf-8' });
+    const srtName = `quiz-subtitles-${Date.now()}.srt`;
+    const res = await saveOrDownloadBlob(srtBlob, srtName, 'text/plain;charset=utf-8');
+    if (res.ok) {
+      triggerHaptic('success');
+      setSaveNotice(`تم تنزيل ملف الترجمة الزمنية (${srtName}) المتوافق مع يوتيوب ✓`);
+    } else if (res.error) {
+      setSaveNotice(`تعذر تنزيل الترجمة: ${res.error}`);
     }
   };
 
@@ -742,41 +917,83 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
           </div>
 
           {/* Export Scope Switcher */}
-          {project.slides.length > 1 && (
-            <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-[var(--surface)] border border-[var(--pline)]">
-              <button
-                type="button"
-                onClick={() => handleSwitchScope('full')}
-                className={`py-1.5 px-2 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
-                  scopeMode === 'full'
-                    ? 'bg-[#00B050] text-white'
-                    : 'text-[var(--pmuted)] hover:text-[var(--ptxt)]'
-                }`}
-              >
-                الفيديو الكامل
-              </button>
-              <button
-                type="button"
-                onClick={() => handleSwitchScope('single')}
-                className={`py-1.5 px-2 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
-                  scopeMode === 'single'
-                    ? 'bg-[#00B050] text-white'
-                    : 'text-[var(--pmuted)] hover:text-[var(--ptxt)]'
-                }`}
-              >
-                سؤال محدد
-              </button>
-              <button
-                type="button"
-                onClick={() => handleSwitchScope('splitBatch')}
-                className={`py-1.5 px-2 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
-                  scopeMode === 'splitBatch'
-                    ? 'bg-[#00B050] text-white'
-                    : 'text-[var(--pmuted)] hover:text-[var(--ptxt)]'
-                }`}
-              >
-                كل سؤال مستقل
-              </button>
+          <div className="flex flex-wrap items-center gap-1 p-1 rounded-xl bg-[var(--surface)] border border-[var(--pline)]">
+            <button
+              type="button"
+              onClick={() => handleSwitchScope('full')}
+              className={`flex-1 min-w-[90px] py-1.5 px-2 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
+                scopeMode === 'full'
+                  ? 'bg-[#00B050] text-white'
+                  : 'text-[var(--pmuted)] hover:text-[var(--ptxt)]'
+              }`}
+            >
+              الفيديو الكامل
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSwitchScope('dualRatio')}
+              className={`flex-1 min-w-[110px] py-1.5 px-2 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
+                scopeMode === 'dualRatio'
+                  ? 'bg-[#00B050] text-white'
+                  : 'text-[var(--pmuted)] hover:text-[var(--ptxt)]'
+              }`}
+            >
+              9:16 + 16:9 معاً 🎬
+            </button>
+            {project.slides.length > 1 && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => handleSwitchScope('single')}
+                  className={`flex-1 min-w-[80px] py-1.5 px-2 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
+                    scopeMode === 'single'
+                      ? 'bg-[#00B050] text-white'
+                      : 'text-[var(--pmuted)] hover:text-[var(--ptxt)]'
+                  }`}
+                >
+                  سؤال محدد
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSwitchScope('splitBatch')}
+                  className={`flex-1 min-w-[90px] py-1.5 px-2 rounded-lg text-[11px] font-bold transition-colors cursor-pointer ${
+                    scopeMode === 'splitBatch'
+                      ? 'bg-[#00B050] text-white'
+                      : 'text-[var(--pmuted)] hover:text-[var(--ptxt)]'
+                  }`}
+                >
+                  كل سؤال مستقل
+                </button>
+              </>
+            )}
+          </div>
+
+          {status === 'idle' && scopeMode === 'dualRatio' && (
+            <div className="flex flex-col gap-3 p-3.5 rounded-xl bg-[var(--surface)] border border-[var(--pline)]">
+              <div className="flex items-start gap-2 text-xs text-[var(--ptxt)] leading-relaxed">
+                <Layers className="w-4 h-4 text-[#00B050] shrink-0 mt-0.5" />
+                <span>
+                  تصدير مزدوج بضغطة واحدة: يُنتج نسخة عمودية <strong>9:16 للشورتس والريلز</strong> ثم
+                  نسخة أفقية <strong>16:9 لفيديوهات يوتيوب العادية</strong> بنفس الأسئلة والأصوات والهوية.
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void startDualAspectExport()}
+                  className="flex-1 py-2.5 px-3 rounded-xl bg-[#00B050] hover:bg-[#00c85b] text-white text-xs font-bold cursor-pointer"
+                >
+                  بدء التصدير المزدوج (9:16 + 16:9)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDownloadSrt()}
+                  className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-[var(--panel)] border border-[var(--pline)] hover:border-[#00B050] text-xs font-bold cursor-pointer"
+                >
+                  <FileText className="w-4 h-4 text-[#00B050]" />
+                  <span>ملف ترجمة SRT</span>
+                </button>
+              </div>
             </div>
           )}
 
@@ -868,25 +1085,36 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
               <div className="flex items-center gap-2 text-sm font-bold text-[#00B050]">
                 <CheckCircle2 className="w-5 h-5" />
                 <span>
-                  {scopeMode === 'splitBatch'
-                    ? `تم تجهيز وتنزيل ${batchDoneCount} فيديو بنجاح`
-                    : 'تم تجهيز الفيديو بنجاح مع الأصوات'}
+                  {scopeMode === 'dualRatio'
+                    ? 'تم تجهيز النسختين (9:16 + 16:9) بنجاح'
+                    : scopeMode === 'splitBatch'
+                      ? `تم تجهيز وتنزيل ${batchDoneCount} فيديو بنجاح`
+                      : 'تم تجهيز الفيديو بنجاح مع الأصوات'}
                 </span>
               </div>
 
-              <div className="w-full max-h-[250px] flex justify-center bg-black rounded-xl overflow-hidden border border-[var(--pline)]">
+              <div className="w-full max-h-[250px] flex justify-center gap-2 bg-black rounded-xl overflow-hidden border border-[var(--pline)]">
                 <video
                   src={videoUrl}
                   controls
                   playsInline
                   className="h-[240px] w-auto object-contain"
                 />
+                {secondVideoUrl && (
+                  <video
+                    src={secondVideoUrl}
+                    controls
+                    playsInline
+                    className="h-[240px] w-auto object-contain border-r border-white/10"
+                  />
+                )}
               </div>
 
               <div className="flex items-center justify-between text-xs text-[var(--pmuted)]">
                 <span>الصيغة: {result.extension.toUpperCase()}</span>
                 <span className="font-mono-nums">
                   الحجم: {(result.blob.size / (1024 * 1024)).toFixed(2)} MB
+                  {secondResult ? ` · 16:9: ${(secondResult.blob.size / (1024 * 1024)).toFixed(2)} MB` : ''}
                 </span>
               </div>
 
@@ -910,8 +1138,27 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
                   className="flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-[#00B050] hover:bg-[#00c85b] disabled:opacity-60 text-white text-xs sm:text-sm font-bold transition-colors cursor-pointer"
                 >
                   <Download className="w-4 h-4" />
-                  <span>{isSaving ? 'جارٍ الحفظ...' : runningInAndroidApk ? 'حفظ في المعرض / التنزيلات' : 'تنزيل الفيديو'}</span>
+                  <span>
+                    {isSaving
+                      ? 'جارٍ الحفظ...'
+                      : secondResult
+                        ? 'تنزيل نسخة الشورتس (9:16)'
+                        : runningInAndroidApk
+                          ? 'حفظ في المعرض / التنزيلات'
+                          : 'تنزيل الفيديو'}
+                  </span>
                 </button>
+                {secondResult && (
+                  <button
+                    type="button"
+                    disabled={isSaving}
+                    onClick={() => void handleDownloadSecond()}
+                    className="flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-[var(--panel)] border border-[#00B050] text-[#00B050] dark:text-[#6ee7b7] hover:bg-[#00B050]/10 disabled:opacity-60 text-xs sm:text-sm font-bold transition-colors cursor-pointer"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>تنزيل نسخة يوتيوب (16:9)</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   disabled={isCapturingThumb}
@@ -921,6 +1168,15 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
                 >
                   <Camera className="w-4 h-4 text-[#00B050]" />
                   <span>{isCapturingThumb ? '...' : 'غلاف JPG'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDownloadSrt()}
+                  title="تنزيل ملف الترجمة الزمنية (.srt) المتوافق مع YouTube"
+                  className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-[var(--surface)] border border-[var(--pline)] hover:border-[#00B050] text-xs font-bold transition-colors cursor-pointer"
+                >
+                  <FileText className="w-4 h-4 text-[var(--gold)]" />
+                  <span>ترجمة SRT</span>
                 </button>
                 {canNativeShare && (
                   <button
@@ -952,7 +1208,9 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    if (scopeMode === 'splitBatch') {
+                    if (scopeMode === 'dualRatio') {
+                      void startDualAspectExport();
+                    } else if (scopeMode === 'splitBatch') {
                       void startSplitBatchExport();
                     } else if (scopeMode === 'single') {
                       startSingleOrFullExport('single', selectedSlideIdx);
@@ -970,7 +1228,9 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
                     type="button"
                     onClick={() => {
                       setFormatPref('webm');
-                      if (scopeMode === 'splitBatch') {
+                      if (scopeMode === 'dualRatio') {
+                        void startDualAspectExport('webm', resPref);
+                      } else if (scopeMode === 'splitBatch') {
                         void startSplitBatchExport('webm', resPref);
                       } else if (scopeMode === 'single') {
                         startSingleOrFullExport('single', selectedSlideIdx, 'webm', resPref);
@@ -988,7 +1248,9 @@ export const ExportVideoModal: React.FC<ExportVideoModalProps> = ({
                     type="button"
                     onClick={() => {
                       setResPref('720p');
-                      if (scopeMode === 'splitBatch') {
+                      if (scopeMode === 'dualRatio') {
+                        void startDualAspectExport(formatPref, '720p');
+                      } else if (scopeMode === 'splitBatch') {
                         void startSplitBatchExport(formatPref, '720p');
                       } else if (scopeMode === 'single') {
                         startSingleOrFullExport('single', selectedSlideIdx, formatPref, '720p');

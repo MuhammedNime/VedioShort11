@@ -872,6 +872,10 @@ function makeCloudSafeProjectJson(project: QuizProject): {
         const safeUrl = stripHeavyAsset(vo.answer.dataUrl);
         vo.answer = safeUrl ? { ...vo.answer, dataUrl: safeUrl } : undefined;
       }
+      if (vo.explanation) {
+        const safeUrl = stripHeavyAsset(vo.explanation.dataUrl);
+        vo.explanation = safeUrl ? { ...vo.explanation, dataUrl: safeUrl } : undefined;
+      }
       next.voiceover = vo;
     }
     return next;
@@ -905,7 +909,44 @@ function makeCloudSafeProjectJson(project: QuizProject): {
       },
     });
   }
-  return { safeProject, json: json.slice(0, 650_000) };
+  return { safeProject, json };
+}
+
+const ALLOWED_CLOUD_VOICES = new Set(['Kore', 'Puck', 'Charon', 'Fenrir', 'Zephyr']);
+
+function isUntouchedDefaultStarterProject(proj: QuizProject): boolean {
+  return proj.id === 'default-shorts-project' && (proj.updatedAt || 0) === 0;
+}
+
+function buildCloudProjectDocData(project: QuizProject, uid: string): {
+  safeId: string;
+  data: Record<string, unknown>;
+} {
+  const safeId = sanitizeFirestoreId(project.id);
+  const { safeProject, json } = makeCloudSafeProjectJson(project);
+  const rawVoice = String(safeProject.preferredAiVoice || 'Kore');
+  const safeVoice = ALLOWED_CLOUD_VOICES.has(rawVoice) ? rawVoice : 'Kore';
+  const safeName = (safeProject.name || '').trim().slice(0, 120) || 'مشروع بدون اسم';
+  const safeUpdatedAt = Math.max(
+    1,
+    Math.floor(safeProject.updatedAt && safeProject.updatedAt > 0 ? safeProject.updatedAt : Date.now())
+  );
+
+  return {
+    safeId,
+    data: {
+      id: safeId,
+      ownerId: uid,
+      name: safeName,
+      schemaVersion: Math.max(1, Math.min(30, Math.round(safeProject.schemaVersion || 9))),
+      preferredAiVoice: safeVoice,
+      aspectRatio: safeProject.template.aspectRatio === '16:9' ? '16:9' : '9:16',
+      slideCount: Math.max(1, Math.min(50, safeProject.slides.length)),
+      projectJson: json.slice(0, 650_000),
+      updatedAt: safeUpdatedAt,
+      serverUpdatedAt: serverTimestamp(),
+    },
+  };
 }
 
 function mergeLocalMediaIntoCloudProject(
@@ -921,12 +962,37 @@ function mergeLocalMediaIntoCloudProject(
       ...cs,
       imageDataUrl: cs.imageDataUrl || ls.imageDataUrl,
       optionImages: cs.optionImages ?? ls.optionImages,
-      voiceover: cs.voiceover ?? ls.voiceover,
+      voiceover: cs.voiceover
+        ? {
+            ...cs.voiceover,
+            question: cs.voiceover.question || ls.voiceover?.question,
+            options: cs.voiceover.options || ls.voiceover?.options,
+            answer: cs.voiceover.answer || ls.voiceover?.answer,
+            explanation: cs.voiceover.explanation || ls.voiceover?.explanation,
+          }
+        : ls.voiceover,
     };
   });
+
+  const mergedAudio = { ...cloudProject.audio };
+  for (const key of Object.keys(mergedAudio) as Array<keyof typeof mergedAudio>) {
+    const cSlot = mergedAudio[key];
+    const lSlot = localProject.audio?.[key];
+    if (cSlot && !cSlot.customDataUrl && lSlot?.customDataUrl) {
+      mergedAudio[key] = {
+        ...cSlot,
+        sourceType: lSlot.sourceType,
+        customDataUrl: lSlot.customDataUrl,
+        customFileName: lSlot.customFileName || cSlot.customFileName,
+        duration: lSlot.duration ?? cSlot.duration,
+      };
+    }
+  }
+
   return {
     ...cloudProject,
     slides: mergedSlides,
+    audio: mergedAudio,
     template: {
       ...cloudProject.template,
       customBgDataUrl: cloudProject.template.customBgDataUrl || localProject.template.customBgDataUrl,
@@ -935,8 +1001,97 @@ function mergeLocalMediaIntoCloudProject(
         cloudProject.template.presenterPhotoDataUrl || localProject.template.presenterPhotoDataUrl,
       introHookAudio: cloudProject.template.introHookAudio || localProject.template.introHookAudio,
       endCardAudio: cloudProject.template.endCardAudio || localProject.template.endCardAudio,
+      aiPresenter: cloudProject.template.aiPresenter
+        ? {
+            ...cloudProject.template.aiPresenter,
+            customBgDataUrl:
+              cloudProject.template.aiPresenter.customBgDataUrl ||
+              localProject.template.aiPresenter?.customBgDataUrl,
+          }
+        : localProject.template.aiPresenter,
     },
   };
+}
+
+export async function pushSingleProjectToCloud(project: QuizProject): Promise<boolean> {
+  const user = firebaseAuth.currentUser;
+  if (!user || !user.emailVerified) return false;
+  if (isUntouchedDefaultStarterProject(project)) return false;
+
+  await ensureFirestoreUserProfile(user);
+  const { safeId, data } = buildCloudProjectDocData(project, user.uid);
+  const pRef = doc(firestoreDb, 'users', user.uid, 'projects', safeId);
+  const docPath = `users/${user.uid}/projects/${safeId}`;
+  try {
+    await setDoc(pRef, data);
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, docPath);
+  }
+}
+
+export async function deleteCloudProject(projectId: string): Promise<void> {
+  const user = firebaseAuth.currentUser;
+  if (!user) return;
+  const safeId = sanitizeFirestoreId(projectId);
+  const docPath = `users/${user.uid}/projects/${safeId}`;
+  try {
+    await deleteDoc(doc(firestoreDb, 'users', user.uid, 'projects', safeId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, docPath);
+  }
+}
+
+export async function pushSinglePresetToCloud(preset: CustomTemplatePreset): Promise<boolean> {
+  const user = firebaseAuth.currentUser;
+  if (!user || !user.emailVerified) return false;
+
+  await ensureFirestoreUserProfile(user);
+  const safeId = sanitizeFirestoreId(preset.id);
+  const prRef = doc(firestoreDb, 'users', user.uid, 'presets', safeId);
+  const docPath = `users/${user.uid}/presets/${safeId}`;
+
+  const slimTpl = { ...preset.template };
+  slimTpl.customBgDataUrl = stripHeavyAsset(slimTpl.customBgDataUrl);
+  slimTpl.brandLogoDataUrl = stripHeavyAsset(slimTpl.brandLogoDataUrl);
+  slimTpl.presenterPhotoDataUrl = stripHeavyAsset(slimTpl.presenterPhotoDataUrl);
+  const slimPreset: CustomTemplatePreset = { ...preset, template: slimTpl };
+  const json = JSON.stringify(slimPreset).slice(0, 149_000);
+  const localTs = preset.updatedAt || preset.createdAt || Date.now();
+
+  try {
+    const existingSnap = await getDoc(prRef);
+    const existingCreatedAt =
+      existingSnap.exists() && typeof existingSnap.data()?.createdAt === 'number'
+        ? (existingSnap.data().createdAt as number)
+        : Math.max(0, Math.floor(preset.createdAt || Date.now()));
+
+    await setDoc(prRef, {
+      id: safeId,
+      ownerId: user.uid,
+      name: (preset.name || 'ستايلي الخاص').trim().slice(0, 120) || 'ستايلي الخاص',
+      createdAt: existingCreatedAt,
+      updatedAt: Math.max(0, Math.floor(localTs)),
+      includesMedia: Boolean(preset.includesMedia),
+      presetJson: json,
+      serverUpdatedAt: serverTimestamp(),
+    });
+    return true;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, docPath);
+  }
+}
+
+export async function deleteCloudPreset(presetId: string): Promise<void> {
+  const user = firebaseAuth.currentUser;
+  if (!user) return;
+  const safeId = sanitizeFirestoreId(presetId);
+  const docPath = `users/${user.uid}/presets/${safeId}`;
+  try {
+    await deleteDoc(doc(firestoreDb, 'users', user.uid, 'presets', safeId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, docPath);
+  }
 }
 
 export interface SyncProjectsPresetsResult {
@@ -945,6 +1100,7 @@ export interface SyncProjectsPresetsResult {
   presetsPulled: number;
   presetsPushed: number;
   updatedActiveProject?: QuizProject;
+  newestCloudProject?: QuizProject;
 }
 
 export async function syncProjectsAndPresetsWithCloud(
@@ -956,7 +1112,9 @@ export async function syncProjectsAndPresetsWithCloud(
     throw new Error('يرجى تسجيل الدخول بحساب Google أولاً للمزامنة السحابية.');
   }
   await ensureFirestoreUserProfile(user);
-  await saveProjectToStore(currentProject);
+  if (!isUntouchedDefaultStarterProject(currentProject)) {
+    await saveProjectToStore(currentProject, { preserveUpdatedAt: true });
+  }
 
   // 1. Load local library projects
   onProgress?.('جارٍ تجهيز المشاريع المحلية...');
@@ -1003,19 +1161,31 @@ export async function syncProjectsAndPresetsWithCloud(
   let projectsPushed = 0;
   const projectsToSaveLocally: QuizProject[] = [];
   const projectsToPushCloud: QuizProject[] = [];
+  let newestCloudProject: QuizProject | undefined;
+  let newestCloudTs = -1;
 
   for (const [safeId, cloudEntry] of cloudProjectsMap.entries()) {
     const localMatch = Array.from(localProjects.values()).find(
       (p) => sanitizeFirestoreId(p.id) === safeId
     );
-    if (!localMatch || cloudEntry.updatedAt > (localMatch.updatedAt || 0) + 1500) {
-      const merged = mergeLocalMediaIntoCloudProject(cloudEntry.project, localMatch);
-      projectsToSaveLocally.push(merged);
+    const mergedForTrack = mergeLocalMediaIntoCloudProject(cloudEntry.project, localMatch);
+    if (cloudEntry.updatedAt > newestCloudTs) {
+      newestCloudTs = cloudEntry.updatedAt;
+      newestCloudProject = mergedForTrack;
+    }
+
+    const localTs = localMatch?.updatedAt || 0;
+    const localIsUntouchedZero = Boolean(localMatch && localTs === 0 && cloudEntry.updatedAt > 0);
+    if (!localMatch || localIsUntouchedZero || cloudEntry.updatedAt > localTs + 1500) {
+      projectsToSaveLocally.push(mergedForTrack);
       projectsPulled += 1;
     }
   }
 
   for (const localProj of localProjects.values()) {
+    if (isUntouchedDefaultStarterProject(localProj)) {
+      continue;
+    }
     const safeId = sanitizeFirestoreId(localProj.id);
     const cloudMatch = cloudProjectsMap.get(safeId);
     if (!cloudMatch || (localProj.updatedAt || 0) > cloudMatch.updatedAt + 1500) {
@@ -1029,23 +1199,11 @@ export async function syncProjectsAndPresetsWithCloud(
 
   if (projectsToPushCloud.length > 0) {
     for (const proj of projectsToPushCloud) {
-      const safeId = sanitizeFirestoreId(proj.id);
-      const { safeProject, json } = makeCloudSafeProjectJson(proj);
+      const { safeId, data } = buildCloudProjectDocData(proj, user.uid);
       const pRef = doc(firestoreDb, 'users', user.uid, 'projects', safeId);
       const docPath = `users/${user.uid}/projects/${safeId}`;
       try {
-        await setDoc(pRef, {
-          id: safeId,
-          ownerId: user.uid,
-          name: (safeProject.name || 'مشروع بدون اسم').slice(0, 120),
-          schemaVersion: Math.max(1, Math.min(30, Math.round(safeProject.schemaVersion || 9))),
-          preferredAiVoice: safeProject.preferredAiVoice || 'Kore',
-          aspectRatio: safeProject.template.aspectRatio === '16:9' ? '16:9' : '9:16',
-          slideCount: Math.max(1, Math.min(50, safeProject.slides.length)),
-          projectJson: json,
-          updatedAt: Math.max(0, Math.floor(safeProject.updatedAt || Date.now())),
-          serverUpdatedAt: serverTimestamp(),
-        });
+        await setDoc(pRef, data);
         projectsPushed += 1;
       } catch (error) {
         handleFirestoreError(error, OperationType.WRITE, docPath);
@@ -1059,6 +1217,7 @@ export async function syncProjectsAndPresetsWithCloud(
   const localPresets = await loadCustomPresetsAsync();
   const cloudPresetsList: CustomTemplatePreset[] = [];
   const cloudPresetUpdated = new Map<string, number>();
+  const cloudPresetCreated = new Map<string, number>();
 
   try {
     const prQ = query(
@@ -1072,11 +1231,15 @@ export async function syncProjectsAndPresetsWithCloud(
       try {
         const parsed = JSON.parse(data.presetJson) as CustomTemplatePreset;
         if (parsed && parsed.id && parsed.template) {
+          const safePresetId = sanitizeFirestoreId(parsed.id);
           cloudPresetsList.push(parsed);
           cloudPresetUpdated.set(
-            sanitizeFirestoreId(parsed.id),
+            safePresetId,
             typeof data.updatedAt === 'number' ? data.updatedAt : parsed.updatedAt || parsed.createdAt
           );
+          if (typeof data.createdAt === 'number') {
+            cloudPresetCreated.set(safePresetId, data.createdAt);
+          }
         }
       } catch {
         // skip invalid preset
@@ -1107,12 +1270,13 @@ export async function syncProjectsAndPresetsWithCloud(
       const slimPreset: CustomTemplatePreset = { ...preset, template: slimTpl };
       const json = JSON.stringify(slimPreset).slice(0, 149_000);
       const prRef = doc(firestoreDb, 'users', user.uid, 'presets', safeId);
+      const existingCreatedAt = cloudPresetCreated.get(safeId);
       try {
         await setDoc(prRef, {
           id: safeId,
           ownerId: user.uid,
-          name: (preset.name || 'ستايلي الخاص').slice(0, 120),
-          createdAt: Math.max(0, Math.floor(preset.createdAt || Date.now())),
+          name: (preset.name || 'ستايلي الخاص').trim().slice(0, 120) || 'ستايلي الخاص',
+          createdAt: Math.max(0, Math.floor(existingCreatedAt ?? preset.createdAt ?? Date.now())),
           updatedAt: Math.max(0, Math.floor(localTs || Date.now())),
           includesMedia: Boolean(preset.includesMedia),
           presetJson: json,
@@ -1133,6 +1297,7 @@ export async function syncProjectsAndPresetsWithCloud(
     presetsPulled,
     presetsPushed,
     updatedActiveProject,
+    newestCloudProject,
   };
 }
 
@@ -1141,11 +1306,39 @@ export interface FullWorkspaceSyncResult {
   workspace: SyncProjectsPresetsResult;
 }
 
+const inFlightWorkspaceSyncs = new Map<string, Promise<FullWorkspaceSyncResult>>();
+
 export async function syncFullWorkspaceWithCloud(
   currentProject: QuizProject,
   onProgress?: (label: string) => void
 ): Promise<FullWorkspaceSyncResult> {
-  const bank = await syncQuestionBankWithCloud({ onProgress });
-  const workspace = await syncProjectsAndPresetsWithCloud(currentProject, onProgress);
-  return { bank, workspace };
+  const user = firebaseAuth.currentUser;
+  if (!user) {
+    throw new Error('يرجى تسجيل الدخول بحساب Google أولاً للمزامنة السحابية.');
+  }
+  const existing = inFlightWorkspaceSyncs.get(user.uid);
+  if (existing) {
+    return existing;
+  }
+
+  const run = (async (): Promise<FullWorkspaceSyncResult> => {
+    const bank = await syncQuestionBankWithCloud({ onProgress });
+    const workspace = await syncProjectsAndPresetsWithCloud(currentProject, onProgress);
+
+    saveCloudSyncMeta({
+      lastSyncedAt: Date.now(),
+      lastSyncedEmail: user.email || undefined,
+      lastPulled: bank.pulled + workspace.projectsPulled + workspace.presetsPulled,
+      lastPushed: bank.pushed + workspace.projectsPushed + workspace.presetsPushed,
+    });
+
+    return { bank, workspace };
+  })();
+
+  inFlightWorkspaceSyncs.set(user.uid, run);
+  try {
+    return await run;
+  } finally {
+    inFlightWorkspaceSyncs.delete(user.uid);
+  }
 }

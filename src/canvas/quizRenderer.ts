@@ -4862,10 +4862,12 @@ export function renderQuizFrame(
       });
 
       // Score Challenge Prompt Pill
-      if (slides.length > 1) {
+      const heroPollText = (template.endCommentPollText || '').trim() ||
+        (slides.length > 1 ? `كم إجابة صح جبت من ${slides.length}؟ 👇` : '');
+      if (heroPollText) {
         ctx.font = `800 ${isWide ? 28 : 30}px ${fontStack}`;
         ctx.fillStyle = isColorDark(template.questionBoxColor) ? '#EDD6A2' : '#0f172a';
-        ctx.fillText(`كم إجابة صح جبت من ${slides.length}؟ 👇`, 0, -6);
+        ctx.fillText(heroPollText, 0, -6);
       }
 
       // Red Animated Subscribe & Bell CTA Button (Hero Presenter points toward this!)
@@ -4900,6 +4902,7 @@ export function renderQuizFrame(
       ctx.restore();
 
       drawBrandWatermark(ctx, template, globalTime, W, H, fontStack);
+      drawAudioWaveformVisualizer(ctx, template, globalTime, slides, timing, audio, W, H, isPreview, interactiveState);
       drawCinematicVideoProgressBar(ctx, template, globalTime, slides, timing, audio, W);
       ctx.restore();
       return;

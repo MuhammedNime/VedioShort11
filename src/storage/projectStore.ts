@@ -1161,6 +1161,24 @@ export function normalizeLoadedProject(
         ...(rawAudio?.bgMusic ?? {}),
       },
     },
+    publishKit:
+      result.publishKit && typeof result.publishKit === 'object'
+        ? {
+            title: String(result.publishKit.title || ''),
+            description: String(result.publishKit.description || ''),
+            hashtags: Array.isArray(result.publishKit.hashtags)
+              ? result.publishKit.hashtags.map((h) => String(h))
+              : [],
+            tags: Array.isArray(result.publishKit.tags)
+              ? result.publishKit.tags.map((t) => String(t))
+              : [],
+            pinnedComment: String(result.publishKit.pinnedComment || ''),
+          }
+        : undefined,
+    updatedAt:
+      typeof result.updatedAt === 'number' && Number.isFinite(result.updatedAt)
+        ? result.updatedAt
+        : 0,
   };
 }
 
@@ -1222,21 +1240,28 @@ export async function loadProjectFromStore(): Promise<QuizProject> {
       }
     }
 
-    const legacy = await idbGet<Partial<QuizProject>>(ACTIVE_PROJECT_KEY);
+      const legacy = await idbGet<Partial<QuizProject>>(ACTIVE_PROJECT_KEY);
     const normalized = await hydrateProjectMedia(normalizeLoadedProject(legacy));
-    await saveProjectToStore(normalized);
+    await saveProjectToStore(normalized, { preserveUpdatedAt: true });
     return normalized;
   } catch {
     return createDefaultProject();
   }
 }
 
-export async function saveProjectToStore(project: QuizProject): Promise<void> {
+export async function saveProjectToStore(
+  project: QuizProject,
+  options?: { preserveUpdatedAt?: boolean }
+): Promise<void> {
   try {
     const stamped: QuizProject = {
       ...project,
       schemaVersion: CURRENT_SCHEMA_VERSION,
-      updatedAt: Date.now(),
+      updatedAt: options?.preserveUpdatedAt
+        ? typeof project.updatedAt === 'number'
+          ? project.updatedAt
+          : 0
+        : Date.now(),
     };
     const compact = await offloadProjectMediaBlobs(stamped);
     await idbSet(`${PROJECT_ITEM_PREFIX}${compact.id}`, compact);
@@ -1268,7 +1293,10 @@ export async function saveProjectsToLibraryBatch(projects: QuizProject[]): Promi
       const stamped: QuizProject = {
         ...p,
         schemaVersion: CURRENT_SCHEMA_VERSION,
-        updatedAt: now + (projects.length - i),
+        updatedAt:
+          typeof p.updatedAt === 'number' && Number.isFinite(p.updatedAt) && p.updatedAt > 0
+            ? p.updatedAt
+            : now + (projects.length - i),
       };
       const compact = await offloadProjectMediaBlobs(stamped);
       await idbSet(`${PROJECT_ITEM_PREFIX}${compact.id}`, compact);

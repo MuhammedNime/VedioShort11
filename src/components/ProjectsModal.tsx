@@ -1,5 +1,20 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Copy, Download, FileUp, FolderOpen, Plus, Star, Trash2, X } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { User } from 'firebase/auth';
+import {
+  Cloud,
+  Copy,
+  Download,
+  FileUp,
+  FolderOpen,
+  LogIn,
+  LogOut,
+  Plus,
+  RefreshCw,
+  Star,
+  Trash2,
+  X,
+} from 'lucide-react';
+import { CloudSyncMeta, deleteCloudProject } from '../services/firebaseClient';
 import { buildFullStudioBackup, restoreFullStudioBackup } from '../storage/backupVault';
 import { CustomTemplatePreset, getDefaultCustomPreset } from '../storage/customPresets';
 import {
@@ -9,7 +24,12 @@ import {
   loadProjectById,
   saveProjectToStore,
 } from '../storage/projectStore';
-import { DEFAULT_TEMPLATE, QuizProject, createDefaultProject } from '../types/quiz';
+import {
+  DEFAULT_TEMPLATE,
+  QuizProject,
+  cloneAudioSettings,
+  createBlankNewProject,
+} from '../types/quiz';
 import { saveOrDownloadBlob } from '../utils/nativeDownload';
 
 interface ProjectsModalProps {
@@ -18,6 +38,13 @@ interface ProjectsModalProps {
   onClose: () => void;
   onSelectProject: (proj: QuizProject) => void;
   onRenameCurrent: (name: string) => void;
+  cloudUser?: User | null;
+  isCloudSyncing?: boolean;
+  cloudSyncMeta?: CloudSyncMeta | null;
+  cloudError?: string | null;
+  onCloudSignIn?: () => void;
+  onCloudSignOut?: () => void;
+  onCloudSyncNow?: () => void;
 }
 
 export const ProjectsModal: React.FC<ProjectsModalProps> = ({
@@ -26,52 +53,122 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
   onClose,
   onSelectProject,
   onRenameCurrent,
+  cloudUser,
+  isCloudSyncing = false,
+  cloudSyncMeta,
+  cloudError,
+  onCloudSignIn,
+  onCloudSignOut,
+  onCloudSyncNow,
 }) => {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [editingName, setEditingName] = useState(currentProject.name);
   const [defaultPreset, setDefaultPreset] = useState<CustomTemplatePreset | null>(null);
+  const [applyDefaultStyleOnNew, setApplyDefaultStyleOnNew] = useState(true);
   const [backupNotice, setBackupNotice] = useState<string>('');
   const [isBackingUp, setIsBackingUp] = useState(false);
   const restoreInputRef = useRef<HTMLInputElement | null>(null);
+
+  const refreshLibrary = useCallback(async () => {
+    await saveProjectToStore(currentProject, {
+      preserveUpdatedAt: (currentProject.updatedAt || 0) === 0,
+    });
+    const list = await listProjectsFromStore();
+    setProjects(list);
+  }, [currentProject]);
 
   useEffect(() => {
     if (!isOpen) return;
     setEditingName(currentProject.name);
     setBackupNotice('');
     void getDefaultCustomPreset().then(setDefaultPreset);
-    void saveProjectToStore(currentProject).then(() => {
+    void refreshLibrary();
+  }, [isOpen, currentProject.id, cloudSyncMeta?.lastSyncedAt]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const onCloudSynced = () => {
       void listProjectsFromStore().then(setProjects);
-    });
+    };
+    window.addEventListener('quizpro-cloud-synced', onCloudSynced);
+    return () => window.removeEventListener('quizpro-cloud-synced', onCloudSynced);
   }, [isOpen]);
 
   if (!isOpen) return null;
 
   const handleCreateNew = async () => {
-    const fresh = createDefaultProject();
-    fresh.id = `proj-${Date.now()}`;
-    fresh.name = `مشروع جديد ${projects.length + 1}`;
-    const customDef = defaultPreset ?? (await getDefaultCustomPreset());
-    if (customDef) {
-      fresh.template = {
-        ...DEFAULT_TEMPLATE,
-        ...customDef.template,
-      };
-      if (customDef.timing) {
-        fresh.timing = { ...customDef.timing };
+    await saveProjectToStore(currentProject, {
+      preserveUpdatedAt: (currentProject.updatedAt || 0) === 0,
+    });
+
+    const fresh = createBlankNewProject(`مشروع جديد ${projects.length + 1}`);
+    if (applyDefaultStyleOnNew) {
+      const customDef = defaultPreset ?? (await getDefaultCustomPreset());
+      if (customDef) {
+        fresh.template = {
+          ...DEFAULT_TEMPLATE,
+          ...customDef.template,
+        };
+        if (customDef.timing) {
+          fresh.timing = { ...customDef.timing };
+        }
+        if (customDef.audio) {
+          fresh.audio = cloneAudioSettings(customDef.audio);
+        }
       }
     }
+
     await saveProjectToStore(fresh);
     onSelectProject(fresh);
     onClose();
   };
 
   const handleDuplicateCurrent = async () => {
+    await saveProjectToStore(currentProject, {
+      preserveUpdatedAt: (currentProject.updatedAt || 0) === 0,
+    });
+
+    const baseTime = Date.now();
+    const clonedSlides = currentProject.slides.map((s, idx) => ({
+      ...s,
+      id: `slide-${baseTime}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+      options: [...s.options] as [string, string, string, string],
+      optionImages: s.optionImages
+        ? ([...s.optionImages] as typeof s.optionImages)
+        : undefined,
+      voiceover: s.voiceover
+        ? {
+            ...s.voiceover,
+            options: s.voiceover.options
+              ? ([...s.voiceover.options] as typeof s.voiceover.options)
+              : undefined,
+          }
+        : undefined,
+    }));
+
     const cloned: QuizProject = {
       ...currentProject,
-      id: `proj-${Date.now()}`,
+      id: `proj-${baseTime}-${Math.random().toString(36).slice(2, 6)}`,
       name: `${currentProject.name} (نسخة)`,
-      updatedAt: Date.now(),
+      slides: clonedSlides,
+      template: {
+        ...currentProject.template,
+        aiPresenter: currentProject.template.aiPresenter
+          ? { ...currentProject.template.aiPresenter }
+          : undefined,
+      },
+      timing: { ...currentProject.timing },
+      audio: cloneAudioSettings(currentProject.audio),
+      publishKit: currentProject.publishKit
+        ? {
+            ...currentProject.publishKit,
+            hashtags: [...currentProject.publishKit.hashtags],
+            tags: [...currentProject.publishKit.tags],
+          }
+        : undefined,
+      updatedAt: baseTime,
     };
+
     await saveProjectToStore(cloned);
     onSelectProject(cloned);
     onClose();
@@ -82,6 +179,9 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
       onClose();
       return;
     }
+    await saveProjectToStore(currentProject, {
+      preserveUpdatedAt: (currentProject.updatedAt || 0) === 0,
+    });
     const loaded = await loadProjectById(id);
     if (loaded) {
       onSelectProject(loaded);
@@ -93,6 +193,7 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
     if (id === currentProject.id || projects.length <= 1) return;
     const next = await deleteProjectFromStore(id);
     setProjects(next);
+    void deleteCloudProject(id).catch(() => {});
   };
 
   const handleExportFullBackup = async () => {
@@ -141,6 +242,17 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
     }
   };
 
+  const formatSyncTime = (ts: number) => {
+    try {
+      return new Date(ts).toLocaleTimeString('ar-SA', {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    } catch {
+      return '';
+    }
+  };
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
@@ -150,7 +262,7 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-[var(--pline)]">
           <div className="flex items-center gap-2 text-sm font-bold">
             <FolderOpen className="w-4 h-4 text-[#00B050]" />
-            <span>مكتبة المشاريع المحفوظة</span>
+            <span>مكتبة المشاريع والحفظ السحابي</span>
           </div>
           <button
             type="button"
@@ -161,10 +273,89 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
           </button>
         </div>
 
-        <div className="p-5 flex flex-col gap-4 max-h-[78vh] overflow-y-auto">
+        <div className="p-5 flex flex-col gap-4 max-h-[82vh] overflow-y-auto">
+          {/* Firebase Cloud Sync Account Card */}
+          <div className="rounded-xl bg-[var(--surface)] border border-[var(--pline)] p-3.5 flex flex-col gap-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <Cloud
+                  className={`w-4 h-4 shrink-0 ${
+                    cloudUser ? 'text-[#00B050]' : 'text-[var(--gold)]'
+                  }`}
+                />
+                <span className="text-xs font-extrabold truncate">
+                  {cloudUser ? 'الحفظ السحابي مفعّل بالإيميل' : 'اربط إيميلك لحفظ كل شيء'}
+                </span>
+              </div>
+              {cloudUser && (
+                <span className="px-2 py-0.5 rounded-md bg-[#00B050]/15 text-[#00B050] dark:text-[#6ee7b7] text-[10px] font-bold shrink-0">
+                  متصل
+                </span>
+              )}
+            </div>
+
+            {cloudUser ? (
+              <>
+                <div className="text-[11px] text-[var(--pmuted)] flex flex-col gap-0.5">
+                  <span className="font-bold text-[var(--ptxt)] truncate">
+                    {cloudUser.email || cloudUser.displayName || 'حساب Google مرتبط'}
+                  </span>
+                  <span>
+                    يُحفظ تلقائياً كل مشروع، درس، سؤال، مجلد، وستايل على هذا الإيميل.
+                    {cloudSyncMeta?.lastSyncedAt
+                      ? ` · آخر مزامنة: ${formatSyncTime(cloudSyncMeta.lastSyncedAt)}`
+                      : ''}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    disabled={isCloudSyncing}
+                    onClick={onCloudSyncNow}
+                    className="flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg bg-[#00B050] hover:bg-[#00c85b] disabled:opacity-60 text-white text-[11px] font-bold transition-colors cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isCloudSyncing ? 'animate-spin' : ''}`} />
+                    <span>{isCloudSyncing ? 'جارٍ المزامنة...' : 'مزامنة الكل الآن'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isCloudSyncing}
+                    onClick={onCloudSignOut}
+                    className="flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg bg-[var(--panel)] border border-[var(--pline)] hover:border-rose-400/60 text-[11px] font-bold text-[var(--ptxt)] transition-colors cursor-pointer"
+                  >
+                    <LogOut className="w-3.5 h-3.5 text-rose-400" />
+                    <span>تسجيل الخروج</span>
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-[11px] text-[var(--pmuted)] leading-relaxed">
+                  سجّل الدخول بإيميل Google مرة واحدة ليتم حفظ جميع مشاريعك ودروسك وبنك الأسئلة
+                  والستايلات على السحابة واسترجاعها تلقائياً بمجرد الدخول من أي متصفح أو جهاز.
+                </p>
+                <button
+                  type="button"
+                  disabled={isCloudSyncing}
+                  onClick={onCloudSignIn}
+                  className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-[#00B050] hover:bg-[#00c85b] disabled:opacity-60 text-white text-xs font-extrabold transition-colors cursor-pointer"
+                >
+                  <LogIn className="w-4 h-4" />
+                  <span>{isCloudSyncing ? 'جارٍ تسجيل الدخول...' : 'ربط الإيميل (Google / Firebase)'}</span>
+                </button>
+              </>
+            )}
+
+            {cloudError && (
+              <div className="px-2.5 py-1.5 rounded-lg bg-rose-500/12 border border-rose-500/35 text-[11px] text-rose-400">
+                {cloudError}
+              </div>
+            )}
+          </div>
+
           {/* Rename Active Project */}
           <div className="flex flex-col gap-1.5">
-            <span className="text-[11px] font-bold text-[var(--pmuted)]">اسم المشروع الحالي</span>
+            <span className="text-[11px] font-bold text-[var(--pmuted)]">اسم المشروع المفتوح حالياً</span>
             <div className="flex items-center gap-2">
               <input
                 type="text"
@@ -180,12 +371,20 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
           </div>
 
           {defaultPreset && (
-            <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[var(--gold)]/10 border border-[var(--gold)]/35 text-[11px] text-[var(--gold)] font-semibold">
-              <Star className="w-3.5 h-3.5 fill-current shrink-0" />
-              <span>
-                أي مشروع جديد سيبدأ بستايلك الافتراضي: «{defaultPreset.name}»
+            <label className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-[var(--gold)]/10 border border-[var(--gold)]/35 text-[11px] text-[var(--gold)] font-semibold cursor-pointer">
+              <span className="flex items-center gap-1.5 min-w-0">
+                <Star className="w-3.5 h-3.5 fill-current shrink-0" />
+                <span className="truncate">
+                  تطبيق الستايل الافتراضي «{defaultPreset.name}» عند فتح مشروع جديد
+                </span>
               </span>
-            </div>
+              <input
+                type="checkbox"
+                checked={applyDefaultStyleOnNew}
+                onChange={(e) => setApplyDefaultStyleOnNew(e.target.checked)}
+                className="accent-[#00B050] shrink-0"
+              />
+            </label>
           )}
 
           {/* Quick Actions */}
@@ -196,7 +395,7 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
               className="flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-[#00B050] hover:bg-[#00c85b] text-white text-xs font-bold transition-colors cursor-pointer"
             >
               <Plus className="w-4 h-4" />
-              <span>مشروع جديد فارغ</span>
+              <span>مشروع جديد مستقل</span>
             </button>
             <button
               type="button"
@@ -204,14 +403,14 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
               className="flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl bg-[var(--surface)] hover:border-[var(--gold)] border border-[var(--pline)] text-xs font-bold transition-colors cursor-pointer"
             >
               <Copy className="w-3.5 h-3.5 text-[var(--gold)]" />
-              <span>نسخ القالب كمشروع جديد</span>
+              <span>نسخ الحالي كمشروع جديد</span>
             </button>
           </div>
 
           {/* Projects List */}
           <div className="flex flex-col gap-2">
             <span className="text-[11px] font-bold text-[var(--pmuted)]">
-              جميع المشاريع ({projects.length})
+              جميع المشاريع المحفوظة ({projects.length})
             </span>
 
             {projects.map((p) => {
@@ -255,14 +454,15 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
               );
             })}
           </div>
+
           {/* Full Studio Backup & Restore Section */}
           <div className="rounded-xl bg-[var(--surface)] border border-[var(--pline)] p-3 flex flex-col gap-2.5">
             <div className="flex flex-col gap-0.5">
               <span className="text-[11px] font-bold text-[var(--ptxt)]">
-                نسخة احتياطية شاملة (كل المشاريع والستايلات)
+                نسخة احتياطية كملف JSON (تصدير/استعادة يدوية)
               </span>
               <span className="text-[10px] text-[var(--pmuted)] leading-relaxed">
-                احفظ كل أعمالك في ملف واحد قبل تحديث الـ APK أو نقله لجهاز آخر، واستعدها بضغطة واحدة.
+                يمكنك أيضاً حفظ كل أعمالك في ملف احتياطي على جهازك أو استعادته بأي وقت.
               </span>
             </div>
 

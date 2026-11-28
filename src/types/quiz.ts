@@ -78,6 +78,12 @@ export type ExplanationCardStyle = 'card' | 'pill' | 'minimal';
 
 export type PrizeLadderStyle = 'topStrip' | 'sideColumn';
 
+export type QuizProgressStyle = 'bar' | 'dots' | 'segments';
+export type WaveformStyle = 'bars' | 'mirrorWave' | 'pulseLine';
+export type WaveformPosition = 'bottom' | 'underQuestion';
+export type IntroHookStyle = 'card' | 'channelBumper';
+export type EndCtaStyle = 'youtubeBar' | 'likeAndSubscribe' | 'commentChallenge';
+
 export type SlideType = 'multiple' | 'multiple3' | 'trueFalse' | 'clues' | 'versus';
 export type SlideDifficulty = 'none' | 'easy' | 'medium' | 'hard';
 
@@ -588,11 +594,11 @@ export interface TemplateSettings {
   brandAccentColor?: string;
   brandOpacity: number; // 0.2..1
   showProgressCounter: boolean;
-  quizProgressStyle?: 'bar' | 'dots' | 'segments';
+  quizProgressStyle?: QuizProgressStyle;
   showAudioWaveform?: boolean;
-  waveformStyle?: 'bars' | 'mirrorWave' | 'pulseLine';
+  waveformStyle?: WaveformStyle;
   waveformColor?: string;
-  waveformPosition?: 'bottom' | 'underQuestion';
+  waveformPosition?: WaveformPosition;
   showVideoProgressBar?: boolean;
   videoProgressBarColor?: string;
 
@@ -612,7 +618,7 @@ export interface TemplateSettings {
   revealShockwave?: boolean;
   highlightSpokenOption?: boolean;
   showIntroHook?: boolean;
-  introHookStyle?: 'card' | 'channelBumper';
+  introHookStyle?: IntroHookStyle;
   introBumperSubtitle?: string;
   introHookTemplateId?: string;
   introHookBadge?: string;
@@ -622,7 +628,7 @@ export interface TemplateSettings {
   introHookAudio?: SlideAudioClip;
   introHookSfx?: BuiltInSfxId;
   showEndSubscribeCta?: boolean;
-  endCtaStyle?: 'youtubeBar' | 'likeAndSubscribe' | 'commentChallenge';
+  endCtaStyle?: EndCtaStyle;
   endCommentPollText?: string;
   dualVoiceEnabled?: boolean;
   secondaryAiVoice?: 'Kore' | 'Puck' | 'Charon' | 'Fenrir' | 'Zephyr';
@@ -762,6 +768,14 @@ export interface TimingSettings {
   escalatingMinSeconds?: number; // Minimum floor (e.g. 2.0s)
 }
 
+export interface ProjectPublishKit {
+  title: string;
+  description: string;
+  hashtags: string[];
+  tags: string[];
+  pinnedComment: string;
+}
+
 export interface QuizProject {
   id: string;
   name: string;
@@ -771,6 +785,7 @@ export interface QuizProject {
   template: TemplateSettings;
   timing: TimingSettings;
   audio: AudioSettings;
+  publishKit?: ProjectPublishKit;
   updatedAt: number;
 }
 
@@ -3758,22 +3773,26 @@ export const DEFAULT_SLIDES: QuestionSlide[] = CHANNEL_SAMPLE_SLIDES.map((s) => 
   options: [...s.options] as [string, string, string, string],
 }));
 
-function cloneDefaultAudio(): AudioSettings {
+export function cloneAudioSettings(source: AudioSettings): AudioSettings {
   return {
-    questionEnter: { ...DEFAULT_AUDIO.questionEnter },
-    optionEnter: { ...DEFAULT_AUDIO.optionEnter },
-    countdownTick: { ...DEFAULT_AUDIO.countdownTick },
-    suspense: { ...DEFAULT_AUDIO.suspense },
-    correctReveal: { ...DEFAULT_AUDIO.correctReveal },
-    bgMusic: { ...DEFAULT_AUDIO.bgMusic },
+    questionEnter: { ...source.questionEnter },
+    optionEnter: { ...source.optionEnter },
+    countdownTick: { ...source.countdownTick },
+    suspense: { ...source.suspense },
+    correctReveal: { ...source.correctReveal },
+    bgMusic: { ...source.bgMusic },
   };
+}
+
+function cloneDefaultAudio(): AudioSettings {
+  return cloneAudioSettings(DEFAULT_AUDIO);
 }
 
 export function createDefaultProject(): QuizProject {
   return {
     id: 'default-shorts-project',
     name: 'مشروع شورتس القناة',
-    schemaVersion: 8,
+    schemaVersion: 9,
     preferredAiVoice: 'Kore',
     slides: DEFAULT_SLIDES.map((s) => ({
       ...s,
@@ -3782,7 +3801,33 @@ export function createDefaultProject(): QuizProject {
     template: { ...DEFAULT_TEMPLATE },
     timing: { ...DEFAULT_TIMING },
     audio: cloneDefaultAudio(),
-    updatedAt: Date.now(),
+    updatedAt: 0,
+  };
+}
+
+export function createBlankNewProject(name = 'مشروع جديد'): QuizProject {
+  const now = Date.now();
+  const uidSuffix = Math.random().toString(36).slice(2, 6);
+  return {
+    id: `proj-${now}-${uidSuffix}`,
+    name: name.trim() || 'مشروع جديد',
+    schemaVersion: 9,
+    preferredAiVoice: 'Kore',
+    slides: [
+      {
+        id: `slide-${now}-${uidSuffix}`,
+        badgeText: 'السؤال 1',
+        question: '',
+        options: ['', '', '', ''],
+        correctIndex: 0,
+        explanationText: '',
+        explanationSource: '',
+      },
+    ],
+    template: { ...DEFAULT_TEMPLATE },
+    timing: { ...DEFAULT_TIMING },
+    audio: cloneDefaultAudio(),
+    updatedAt: now,
   };
 }
 
